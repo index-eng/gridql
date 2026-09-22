@@ -432,6 +432,25 @@ changes the loader, not the language.
 Every class records the CIM class it maps to (`reclosers` → `ProtectedSwitch`, `transformers` →
 `PowerTransformer`, `loads` → `EnergyConsumer`, …), which is what CIM export is built on.
 
+## Licence
+
+GridQL is free software under the **GNU Affero General Public License, version 3 or later**
+([LICENSE](LICENSE)). Copyright &copy; 2026 Index Labs, LLC.
+
+**Using it inside your own organisation carries no obligations.** Download it, script against it,
+modify it, run it on your own grid data — the licence asks nothing of you. Copyleft applies when
+you pass copies on to others, or when you offer a *modified* GridQL to users over a network, in
+which case those users must be offered your modified source. That last clause is the point of the
+AGPL: it keeps a modified GridQL from being resold as a closed hosted service.
+
+**Your data is not covered.** The licence governs this software, not what you do with it. Your
+network model, the CIM and CSV that GridQL reads and writes, query results, and the `.gridql` files
+you write are yours — they are the program's input and output, not derivative works of it, the way
+a SQL script is not a derivative of the database engine.
+
+A commercial licence is available for organisations that cannot take copyleft terms; contact Index
+Labs, LLC.
+
 ## Not built yet
 
 GeoJSON output, CSV/JSON input loaders, and the editor — step 6 of the design in `idea.md`.

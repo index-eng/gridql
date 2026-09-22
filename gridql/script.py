@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """.gridql files: reusable query artifacts.
 
 A .gridql file is a query an engineer can keep, review, version-control and

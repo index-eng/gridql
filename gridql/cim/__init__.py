@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """CIM import and export: the translation layer to the industry standard."""
 
 from .exporter import export_network, export_summary

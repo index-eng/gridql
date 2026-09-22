@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """SQLite persistence for the semantic model.
 
 The database is a storage mechanism, not the thing GridQL queries. Loading

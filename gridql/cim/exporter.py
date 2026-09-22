@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Write a network -- or any slice of one -- as CIM RDF/XML.
 
 This is the half of GridQL the overview is really about: pull out the part of

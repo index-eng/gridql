@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Containers: substations and feeders.
 
 The feeder doubles as the builder API from the design doc::

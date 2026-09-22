@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The conducting equipment of the semantic model.
 
 Every class here is CIM-*mapped*, not CIM-shaped: the field names are the ones

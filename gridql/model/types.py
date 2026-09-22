@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The type vocabulary GridQL exposes, and its mapping onto CIM.
 
 ``FIND switches`` matches every switching device -- reclosers, breakers, fuses

@@ -1,4 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """GridQL -- a query language for electric utility networks.
+
+Copyright (C) 2026 Index Labs, LLC. Free software under the GNU Affero General
+Public License, version 3 or later; see the LICENSE file. There is NO
+WARRANTY, to the extent permitted by law.
+
+Using GridQL inside your own organisation carries no obligations. The
+licence asks something of you only when you pass copies on, or when you run
+a *modified* GridQL as a network service -- in which case its users must be
+offered your modified source.
 
     >>> from gridql import build_sample_network, execute
     >>> execute(build_sample_network(), 'FIND transformers WHERE kva >= 500').mrids

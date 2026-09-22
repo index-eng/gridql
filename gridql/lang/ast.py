@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The GridQL abstract syntax tree.
 
 Nodes stay deliberately dumb: they record what was written, and the evaluator

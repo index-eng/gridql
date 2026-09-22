@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The CIM vocabulary GridQL reads and writes, and the mapping to the model.
 
 CIM is the interchange vocabulary, not the internal one. Two consequences run

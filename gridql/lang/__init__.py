@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The GridQL language: lexer, parser, AST and evaluator."""
 
 from .ast import Query, Script

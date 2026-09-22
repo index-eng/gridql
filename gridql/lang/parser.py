@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Recursive-descent parser for GridQL.
 
     script     := statement { ";" statement } [ ";" ]

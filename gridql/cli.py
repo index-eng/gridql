@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Command line interface: one-shot queries, .gridql files, and a REPL."""
 
 from __future__ import annotations
@@ -18,8 +21,32 @@ from .script import run_file
 from .storage import load_network, object_counts, save_network
 from .validate import validate
 
-_BANNER = f"""GridQL {__version__} -- sample network FDR-104 loaded.
-Type a query, '.help' for help, or '.quit' to exit."""
+COPYRIGHT = "Copyright (C) 2026 Index Labs, LLC"
+
+#: Shown by --version and by the REPL command, as AGPL section 5(d) asks of
+#: an interactive interface.
+_LICENSE_NOTICE = f"""GridQL {__version__} -- a query language for electric utility networks
+{COPYRIGHT}
+
+This program is free software: you may redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the licence, or (at your option) any
+later version. It comes with ABSOLUTELY NO WARRANTY. See the LICENSE file, or
+<https://www.gnu.org/licenses/agpl-3.0.html>.
+
+Running GridQL inside your own organisation carries no obligations. The licence
+asks something of you only when you pass copies on, or when you offer a MODIFIED
+GridQL to users over a network -- who must then be offered your modified source."""
+
+
+def _banner(source: str) -> str:
+    return (
+        f"GridQL {__version__}  {COPYRIGHT}\n"
+        "Free software under AGPL-3.0-or-later, with NO WARRANTY; "
+        "type '.license' for details.\n"
+        f"Loaded: {source}.\n"
+        "Type a query, '.help' for help, or '.quit' to exit."
+    )
 
 _HELP = """Queries look like:
 
@@ -36,7 +63,7 @@ Units:      13.8kV, 500kVA, 0.5MVA -- bare numbers use the attribute's own unit
 
 Save a query as a .gridql file and run it with:  gridql run queries/foo.gridql
 
-Commands:   .help  .types  .format <...>  .run <file.gridql>  .validate  .quit"""
+Commands:   .help  .types  .format <...>  .run <file>  .validate  .license  .quit"""
 
 _EPILOG = """examples:
   gridql 'FIND reclosers'
@@ -63,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="a GridQL query; omit to start the REPL, or use 'gridql run FILE.gridql'",
     )
     _add_shared_arguments(parser)
-    parser.add_argument("--version", action="version", version=f"gridql {__version__}")
+    parser.add_argument("--version", action="version", version=_LICENSE_NOTICE)
     return parser
 
 
@@ -275,7 +302,7 @@ def import_cim(path: str, db: str | None = None, force: bool = False) -> str:
 
 
 def repl(network: Network, output_format: str | None, source: str = "sample network FDR-104") -> int:
-    print(_BANNER.replace("sample network FDR-104", source))
+    print(_banner(source))
     while True:
         try:
             line = input("gridql> ").strip()
@@ -305,6 +332,9 @@ def repl(network: Network, output_format: str | None, source: str = "sample netw
                 print(f"output format: {output_format}")
             else:
                 print(f"usage: .format <{'|'.join(FORMATS)}>")
+            continue
+        if lowered == ".license":
+            print(_LICENSE_NOTICE)
             continue
         if lowered == ".validate":
             print(validate(network).summary())

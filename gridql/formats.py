@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Render a query result as a table, JSON or CSV.
 
 Columns come from the classes actually present in the result, so

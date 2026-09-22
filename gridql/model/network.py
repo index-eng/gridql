@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """The graph model: object registry, connectivity, and topology traversal.
 
 This is the layer GridQL actually talks to. Storage lives underneath it (a

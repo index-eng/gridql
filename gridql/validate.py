@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Model validation: say what is wrong with a network instead of guessing.
 
 A query engine that quietly picks an answer when the model is ambiguous is

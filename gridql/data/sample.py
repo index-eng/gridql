@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """A small sample feeder, built entirely through the builder API.
 
 This is the circuit from the design doc's first milestone::

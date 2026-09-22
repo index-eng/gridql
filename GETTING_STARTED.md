@@ -339,6 +339,12 @@ An editor, GeoJSON output, CSV/JSON input loaders, parameterized queries
 from the design notes is not its own syntax — `RETURN cim` and `export-cim --query` do the same job
 with clauses that already exist.
 
+## Licence
+
+AGPL-3.0-or-later, copyright &copy; 2026 Index Labs, LLC — see [LICENSE](LICENSE). Using GridQL
+within your own organisation carries no obligations; your grid data and the `.gridql` files you
+write are yours. See the [README](README.md#licence) for the details, including commercial terms.
+
 ## Next steps
 
 - [README](README.md) — the full language reference

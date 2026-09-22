@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Evaluate a parsed query against a :class:`~gridql.model.network.Network`.
 
 The evaluator only ever calls the semantic model's public API -- ``of_class``,

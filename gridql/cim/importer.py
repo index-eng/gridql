@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Index Labs, LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Read CIM RDF/XML into the semantic model.
 
 Import is the mirror of export, with one asymmetry worth knowing about.
