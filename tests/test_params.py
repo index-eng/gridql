@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gridql import build_sample_network, run_file
+from gridql import Network, build_sample_network, execute, run_file
 from gridql.cli import main, parameters, split_parameters
 from gridql.errors import GridQLError, GridQLSyntaxError, ParameterError
 from gridql.lang import bind_script, evaluate_script, parse, parse_script
@@ -112,6 +112,68 @@ class CoercionTests(unittest.TestCase):
 
     def test_a_boolean_stays_a_boolean(self):
         self.assertEqual(coerce(True), Literal(True))
+
+    def test_a_number_keeps_its_spelling(self):
+        self.assertEqual(coerce("0412").text, "0412")
+        self.assertEqual(coerce(" 12A ").text, "12A")
+
+    def test_a_name_that_starts_with_a_number_stays_a_string(self):
+        # "Main" is not a unit, so this was never a quantity.
+        self.assertEqual(coerce("12 Main"), Literal("12 Main"))
+
+
+def numbered_network():
+    """Equipment whose names look like numbers, as pole and circuit IDs do."""
+    network = Network()
+    feeder = network.add_feeder("0412")
+    feeder.add_breaker("12A")
+    feeder.add_switch("BRK-104")
+    street = network.add_feeder("12 Main")
+    street.add_breaker("B-12")
+    return network
+
+
+class NumberLikeNameTests(unittest.TestCase):
+    def setUp(self):
+        self.network = numbered_network()
+
+    def run_script(self, source, **values):
+        return [r.mrids for r in evaluate_script(self.network, parse_script(source), values)]
+
+    def test_a_leading_zero_survives_as_a_topology_target(self):
+        found = self.run_script("PARAM feeder\nFIND devices FED BY $feeder", feeder="0412")
+        self.assertEqual(found, [["12A", "BRK-104"]])
+
+    def test_a_leading_zero_survives_in_a_default(self):
+        found = self.run_script("PARAM feeder = 0412\nFIND devices FED BY $feeder")
+        self.assertEqual(found, [["12A", "BRK-104"]])
+
+    def test_a_name_with_a_space_survives_as_a_topology_target(self):
+        found = self.run_script("PARAM feeder\nFIND devices FED BY $feeder", feeder="12 Main")
+        self.assertEqual(found, [["B-12"]])
+
+    def test_a_name_ending_in_a_unit_compares_as_a_name(self):
+        found = self.run_script("PARAM device\nFIND devices WHERE name = $device", device="12A")
+        self.assertEqual(found, [["12A"]])
+
+    def test_a_leading_zero_does_not_match_the_bare_number(self):
+        self.network.add_feeder("412")
+        found = self.run_script("PARAM feeder\nFIND feeders WHERE mrid = $feeder", feeder="0412")
+        self.assertEqual(found, [["0412"]])
+
+    def test_a_supplied_number_still_converts_against_a_rated_attribute(self):
+        network = build_sample_network()
+        script = parse_script("PARAM floor\nFIND transformers WHERE kva >= $floor")
+        self.assertEqual(evaluate_script(network, script, {"floor": "0.4MVA"})[0].mrids, ["XFMR-001"])
+        self.assertEqual(evaluate_script(network, script, {"floor": "400"})[0].mrids, ["XFMR-001"])
+
+    def test_contains_a_written_number(self):
+        found = execute(self.network, "FIND devices WHERE name CONTAINS 104").mrids
+        self.assertEqual(found, ["BRK-104"])
+
+    def test_contains_a_supplied_number(self):
+        found = self.run_script("PARAM part\nFIND devices WHERE name CONTAINS $part", part="104")
+        self.assertEqual(found, [["BRK-104"]])
 
 
 class BindingTests(unittest.TestCase):

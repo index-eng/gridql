@@ -32,8 +32,10 @@ from .vocabulary import (
     EXT_IS_TIE,
     EXT_PHASES,
     GRIDQL_NS,
+    MODEL_DESCRIPTION_PREFIX,
     RDF_NS,
     STRUCTURAL_CLASSES,
+    is_cim_namespace,
     model_class_for,
     split_tag,
     strip_reference,
@@ -132,19 +134,43 @@ def _parse(text: str) -> CimDocument:
         raise CimImportError("the document root is not rdf:RDF")
 
     report = ImportReport()
-    records: list[_Record] = []
+    by_identifier: dict[str, _Record] = {}
+    unread: dict[str, int] = {}
     for element in root:
+        namespace, _local = split_tag(element.tag)
+        if not is_cim_namespace(namespace):
+            if namespace and not namespace.startswith(MODEL_DESCRIPTION_PREFIX):
+                unread[namespace] = unread.get(namespace, 0) + 1
+            continue
         record = _read_record(element)
-        if record is not None:
-            records.append(record)
+        if record is None:
+            continue
+        earlier = by_identifier.get(record.xml_id)
+        if earlier is None:
+            by_identifier[record.xml_id] = record
+        else:
+            # RDF lets one resource be described more than once -- an
+            # rdf:ID, then rdf:about blocks adding to it. They are one object.
+            _merge(earlier, record)
 
-    return _build(records, report)
+    if unread:
+        described = ", ".join(f"{ns} x{count}" for ns, count in sorted(unread.items()))
+        report.notes.append(f"ignored elements in namespaces GridQL does not read: {described}")
+
+    return _build(list(by_identifier.values()), report)
+
+
+def _merge(record: _Record, more: _Record) -> None:
+    """Fold a further description of a resource into the first one."""
+    record.values.update(more.values)
+    record.references.update(more.references)
+    if model_class_for(record.cim_class) is None and model_class_for(more.cim_class):
+        record.cim_class = more.cim_class
+    record.mrid = record.values.get(f"{CIM_NS}IdentifiedObject.mRID") or record.xml_id
 
 
 def _read_record(element: ET.Element) -> _Record | None:
-    namespace, cim_class = split_tag(element.tag)
-    if namespace != CIM_NS:
-        return None
+    _namespace, cim_class = split_tag(element.tag)
 
     identifier = element.get(f"{{{RDF_NS}}}ID") or element.get(f"{{{RDF_NS}}}about")
     if identifier is None:
@@ -155,6 +181,8 @@ def _read_record(element: ET.Element) -> _Record | None:
     references: dict[str, str] = {}
     for child in element:
         child_namespace, child_name = split_tag(child.tag)
+        if is_cim_namespace(child_namespace):
+            child_namespace = CIM_NS  # one spelling, whichever release wrote it
         key = f"{child_namespace}{child_name}"
         resource = child.get(f"{{{RDF_NS}}}resource")
         if resource is not None:
@@ -201,7 +229,19 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
 
     network = Network()
 
+    def unique(record: _Record) -> bool:
+        """Two distinct resources may still claim one mRID; keep the first."""
+        if record.mrid not in network.objects:
+            return True
+        report.notes.append(
+            f"{record.cim_class} {record.xml_id}: mRID '{record.mrid}' is already "
+            "used by another object, so it was skipped"
+        )
+        return False
+
     for record in grouped.get("Substation", []):
+        if not unique(record):
+            continue
         network.add_substation(
             record.mrid,
             name=_name(record),
@@ -213,11 +253,31 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
     heads: dict[str, str | None] = {}
     for cim_class in ("Feeder", "Line"):
         for record in grouped.get(cim_class, []):
+            if not unique(record):
+                continue
+            substation = resolve(record.reference(CIM_NS, "Feeder.NormalEnergizingSubstation"))
+            if substation is not None and substation not in network.objects:
+                # Named but not described: keep the link with a bare
+                # substation, rather than a feeder pointing at nothing.
+                network.add_substation(substation)
+                report.substations += 1
+                report.notes.append(
+                    f"{record.mrid}: substation '{substation}' is not described in the "
+                    "document, so it was created with no attributes"
+                )
+            elif substation is not None and not isinstance(
+                network.objects[substation], Substation
+            ):
+                report.notes.append(
+                    f"{record.mrid}: NormalEnergizingSubstation '{substation}' is a "
+                    f"{network.objects[substation].TYPE}, not a substation; ignored"
+                )
+                substation = None
             network.add_feeder(
                 record.mrid,
                 name=_name(record),
                 voltage=voltage_of(record),
-                substation=resolve(record.reference(CIM_NS, "Feeder.NormalEnergizingSubstation")),
+                substation=substation,
                 extras=_extras(record),
             )
             heads[record.mrid] = resolve(record.reference(GRIDQL_NS, EXT_HEAD))
@@ -233,6 +293,8 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
             continue
         if not issubclass(cls, Device):
             continue  # feeders and substations were built above
+        if not unique(record):
+            continue
 
         container = resolve(record.reference(CIM_NS, "Equipment.EquipmentContainer"))
         feeder_mrid = container if container in {f.mrid for f in network.feeders} else None
@@ -335,8 +397,10 @@ def _connect(network: Network, grouped: dict[str, list[_Record]], resolve, repor
     for record in grouped.get("Terminal", []):
         equipment = resolve(record.reference(CIM_NS, "Terminal.ConductingEquipment"))
         node = record.reference(CIM_NS, "Terminal.ConnectivityNode")
-        if equipment is None or node is None or equipment not in network.objects:
+        if equipment is None or node is None:
             continue
+        if not isinstance(network.objects.get(equipment), Device):
+            continue  # unknown, or a container: only equipment has terminals
         members = at_node.setdefault(node, [])
         if equipment not in members:
             members.append(equipment)
@@ -397,4 +461,5 @@ def _float(text: str | None) -> float | None:
 
 
 def _boolean(text: str | None) -> bool:
-    return str(text).strip().lower() == "true"
+    # xsd:boolean allows 1 and 0 as well as true and false.
+    return str(text).strip().lower() in ("true", "1")

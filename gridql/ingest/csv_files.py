@@ -235,6 +235,9 @@ def _add_substation(network, row, line, report, source) -> None:
     if not mrid:
         report.problem(source, line, "no mRID")
         return
+    if mrid in network.objects:
+        report.problem(source, line, f"duplicate mRID '{mrid}'")
+        return
     network.add_substation(
         mrid,
         name=row.get("name", ""),
@@ -248,6 +251,9 @@ def _add_feeder(network, row, line, report, source) -> None:
     if not mrid:
         report.problem(source, line, "no mRID")
         return
+    if mrid in network.objects:
+        report.problem(source, line, f"duplicate mRID '{mrid}'")
+        return
     feeder = network.add_feeder(
         mrid,
         name=row.get("name", ""),
@@ -259,7 +265,14 @@ def _add_feeder(network, row, line, report, source) -> None:
 
 
 def _ensure_containers(network: Network, devices: list) -> None:
-    """Create any feeder or substation the devices refer to but no file declared."""
+    """Create any feeder or substation the files refer to but none declared.
+
+    Feeders count as well as devices: a feeder naming a substation that is
+    not in substations.csv would otherwise point at nothing.
+    """
+    for feeder in network.feeders:
+        if feeder.substation and feeder.substation not in network.objects:
+            network.add_substation(feeder.substation)
     for row, _line in devices:
         substation = row.get("substation")
         if substation and substation not in network.objects:
@@ -297,12 +310,15 @@ def _add_device(network, row, line, report, source) -> None:
         if row.get(attribute):
             fields[attribute] = _quantity(row[attribute], attribute, report, source, line)
 
-    if issubclass(cls, Switch):
-        handled |= {"state", "normal_state", "is_tie"}
+    # Switches and capacitors both have a normal and a present position.
+    if "state" in _fields(cls):
+        handled |= {"state", "normal_state"}
         if row.get("normal_state"):
             fields["normal_state"] = row["normal_state"].upper()
         if row.get("state"):
             fields["state"] = row["state"].upper()
+    if issubclass(cls, Switch):
+        handled.add("is_tie")
         fields["is_tie"] = _boolean(row.get("is_tie"))
 
     if "conductor" in _text_fields(cls):
@@ -329,6 +345,10 @@ def _add_connection(network, row, line, report, source) -> None:
     for mrid in (first, second):
         if mrid not in network.objects:
             report.problem(source, line, f"unknown device '{mrid}'")
+            return
+        if not isinstance(network.objects[mrid], Device):
+            kind = network.objects[mrid].TYPE
+            report.problem(source, line, f"'{mrid}' is a {kind}, not equipment to connect")
             return
     if first == second:
         report.problem(source, line, f"'{first}' connected to itself")
@@ -429,10 +449,14 @@ def write_csv(network: Network, directory: str | Path) -> list[Path]:
     base.mkdir(parents=True, exist_ok=True)
 
     written = [
-        _write(base / SUBSTATIONS, ("mrid", "name", "voltage"), network.substations),
+        _write(
+            base / SUBSTATIONS,
+            _with_extras(["mrid", "name", "voltage"], network.substations),
+            network.substations,
+        ),
         _write(
             base / FEEDERS,
-            ("mrid", "name", "voltage", "substation", "head"),
+            _with_extras(["mrid", "name", "voltage", "substation", "head"], network.feeders),
             network.feeders,
             extra={"head": lambda f: f.head},
         ),
@@ -461,12 +485,21 @@ def _device_columns(network: Network) -> tuple[str, ...]:
     optional = ["state", "normal_state", "is_tie", "kva", "primary_voltage",
                 "secondary_voltage", "kw", "kvar", "length", "conductor", "ampacity"]
     present = [name for name in optional if any(_has(d, name) for d in network.devices)]
-    extras: list[str] = []
-    for device in network.devices:
-        for key in device.extras:
-            if key not in extras:
-                extras.append(key)
-    return tuple(base + present + sorted(extras))
+    return _with_extras(base + present, network.devices)
+
+
+def _with_extras(columns: list[str], objects: Iterable[GridObject]) -> tuple[str, ...]:
+    """``columns``, then every extra the objects carry that is not already one.
+
+    An extra can share a column's name -- a generic device keeps a ``kva``
+    cell in extras -- and writing it twice would give the file two headers
+    with one meaning.
+    """
+    taken = {column.lower() for column in columns}
+    extras = sorted(
+        {key for obj in objects for key in obj.extras if key.lower() not in taken}
+    )
+    return tuple(columns + extras)
 
 
 def _has(device: GridObject, name: str) -> bool:

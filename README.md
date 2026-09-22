@@ -162,7 +162,9 @@ FIND switches WHERE state = OPEN              -- OPEN is not an attribute, so it
 FIND switches WHERE state = "OPEN"            -- quoting always forces the value reading
 ```
 
-String comparisons are case-insensitive.
+String comparisons are case-insensitive. An attribute the type cannot have is an error, not an
+empty answer, so `WHERE kvaa >= 500` asks whether you meant `kva`. Equipment that simply lacks a
+value — a load has no `kva` — does not match.
 
 ### SELECT
 
@@ -301,6 +303,10 @@ with no default is required**: running the file without it is refused, naming wh
 rather than answered against whatever the file happened to say last. A `$name` that was never
 declared is a syntax error, so a typo cannot quietly return nothing.
 
+A value is only a number where the attribute it meets is one: `--min_kva 0.5MVA` converts against
+`kva`, while `--feeder 0412` names circuit `0412`, not `412`, and `--device 12A` is a name, not
+twelve amps.
+
 ```
 $ gridql run queries/export_feeder.gridql --no-config
 error: missing required parameter of queries/export_feeder.gridql: feeder. Supply it with --feeder <value>
@@ -432,8 +438,8 @@ island the head cannot reach, equipment on no feeder or with no connections, a h
 two feeders that is not a tie. These exit zero unless you pass `--strict`.
 
 Findings are grouped by cause, so one missing substation is one finding naming the equipment that
-points at it rather than one finding per device. `import-cim` runs the same checks and reports the
-counts, and `.validate` works inside the REPL.
+points at it rather than one finding per device. `import-cim` runs the same checks and lists what
+it finds (or, with `--db`, reports the counts), and `.validate` works inside the REPL.
 
 ```python
 from gridql import build_sample_network, validate
@@ -581,9 +587,10 @@ feeder, a phase string, the `extras` bag. Those are written in a private `gridql
 round trip is lossless while a standards-only consumer can ignore them. A full export and reimport
 of a network reproduces it exactly, which the test suite asserts object by object.
 
-**Reading other people's CIM.** The importer understands the specialisations other tools emit
-(`LoadBreakSwitch`, `Disconnector`, `ConformLoad`, …), reports any class it does not model rather
-than dropping it silently, and — when no head is recorded — infers the feeder head from the single
+**Reading other people's CIM.** The importer reads any CIM release's namespace (the cim16 URI or
+CIM17's `CIM100`), understands the specialisations other tools emit (`LoadBreakSwitch`,
+`Disconnector`, `ConformLoad`, …), merges a resource described more than once (`rdf:ID`, then
+`rdf:about`), reports any class or namespace it does not read rather than dropping it silently, and — when no head is recorded — infers the feeder head from the single
 breaker on the feeder, saying so. If it cannot, it tells you `DOWNSTREAM OF` will come back empty
 for that feeder rather than inventing an answer.
 

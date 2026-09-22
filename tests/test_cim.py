@@ -239,6 +239,53 @@ class RoundTripTests(unittest.TestCase):
         back = loads_cim(document).network
         self.assertEqual(sorted(back.objects), ["2024 Feeder/A", "99 BRK#1"])
 
+    def test_mrids_that_clean_to_the_same_xml_id_stay_distinct(self):
+        network = Network()
+        feeder = network.add_feeder("F1")
+        feeder.add_breaker("BRK")
+        feeder.add_switch("SW 1")
+        feeder.add_switch("SW_1", after="BRK")
+        feeder.add_switch("123", after="BRK")
+        feeder.add_switch("_123", after="BRK")
+        document = export_network(network)
+        identifiers = [e.get(f"{RDF}ID") for e in parse(document)]
+        self.assertEqual(len(identifiers), len(set(identifiers)))
+        self.assertEqual(snapshot(loads_cim(document).network), snapshot(network))
+
+    def test_connectivity_ids_cannot_be_read_two_ways(self):
+        # CN_X_Y_Z would name both X_Y--Z and X--Y_Z.
+        network = Network()
+        feeder = network.add_feeder("F1")
+        feeder.add_switch("X_Y")
+        feeder.add_switch("Z")
+        feeder.add_switch("X", after=None)
+        feeder.add_switch("Y_Z")
+        document = export_network(network)
+        identifiers = [e.get(f"{RDF}ID") for e in parse(document)]
+        self.assertEqual(len(identifiers), len(set(identifiers)))
+        self.assertEqual(snapshot(loads_cim(document).network), snapshot(network))
+
+    def test_a_document_with_a_shared_rdf_id_is_refused_rather_than_written(self):
+        from gridql.cim import CimExportError
+
+        network = Network()
+        feeder = network.add_feeder("F1")
+        feeder.add_transformer("X", kva=50)
+        feeder.add_switch("X_END_1")  # the id the transformer's first end takes
+        with self.assertRaises(CimExportError) as raised:
+            export_network(network)
+        self.assertIn("X_END_1", str(raised.exception))
+
+    def test_station_equipment_keeps_its_substation(self):
+        from gridql.model import Breaker
+
+        network = Network()
+        network.add_substation("SUB-1", voltage="115kV")
+        network.add(Breaker("BRK-TX", substation="SUB-1"))
+        back = loads_cim(export_network(network)).network
+        self.assertEqual(back.get("BRK-TX").substation, "SUB-1")
+        self.assertEqual(snapshot(back), snapshot(network))
+
     def test_an_empty_network_round_trips(self):
         self.assertEqual(len(loads_cim(export_network(Network())).network), 0)
 
@@ -342,6 +389,67 @@ class ForeignDocumentTests(unittest.TestCase):
         self.assertTrue(any("none could be inferred" in n for n in document.report.notes))
 
 
+class OtherReleaseTests(unittest.TestCase):
+    CIM100 = "http://iec.ch/TC57/CIM100#"
+
+    def test_a_cim100_document_is_read(self):
+        document = loads_cim(FOREIGN.replace(CIM_NS, self.CIM100))
+        self.assertEqual(snapshot(document.network), snapshot(loads_cim(FOREIGN).network))
+
+    def test_elements_in_a_namespace_gridql_does_not_read_are_reported(self):
+        document = loads_cim(FOREIGN.replace(CIM_NS, "http://example.com/not-cim#"))
+        self.assertEqual(len(document.network), 0)
+        self.assertTrue(any("http://example.com/not-cim#" in n for n in document.report.notes))
+
+    def test_the_model_description_header_is_not_reported(self):
+        header = (
+            '<md:FullModel xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#" '
+            'rdf:about="urn:uuid:1"/>'
+        )
+        document = loads_cim(FOREIGN.replace("<cim:Substation", header + "<cim:Substation", 1))
+        self.assertFalse(any("namespaces" in n for n in document.report.notes))
+
+
+class RepeatedDescriptionTests(unittest.TestCase):
+    HEAD = (
+        '<?xml version="1.0"?>\n<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+        f'xmlns:cim="{CIM_NS}">\n'
+    )
+
+    def load(self, body):
+        return loads_cim(self.HEAD + body + "\n</rdf:RDF>")
+
+    def test_an_rdf_about_block_adds_to_the_resource_it_names(self):
+        document = self.load(
+            '<cim:Breaker rdf:ID="B1"><cim:IdentifiedObject.name>Main</cim:IdentifiedObject.name>'
+            "</cim:Breaker>"
+            '<cim:Breaker rdf:about="#B1"><cim:Switch.open>true</cim:Switch.open></cim:Breaker>'
+        )
+        breaker = document.network.get("B1")
+        self.assertEqual((breaker.name, breaker.state), ("Main", "OPEN"))
+        self.assertEqual(document.report.devices, 1)
+
+    def test_two_resources_claiming_one_mrid_keep_the_first_and_say_so(self):
+        document = self.load(
+            '<cim:Breaker rdf:ID="B1"/>'
+            '<cim:Fuse rdf:ID="F9"><cim:IdentifiedObject.mRID>B1</cim:IdentifiedObject.mRID></cim:Fuse>'
+        )
+        self.assertEqual(type(document.network.get("B1")).__name__, "Breaker")
+        self.assertTrue(any("already used" in n for n in document.report.notes))
+
+    def test_a_substation_named_but_not_described_is_created(self):
+        document = self.load(
+            '<cim:Feeder rdf:ID="F1">'
+            '<cim:Feeder.NormalEnergizingSubstation rdf:resource="#SUB-X"/></cim:Feeder>'
+        )
+        self.assertEqual(document.network.get("F1").substation, "SUB-X")
+        self.assertIn("SUB-X", document.network)
+
+    def test_xsd_boolean_one_means_true(self):
+        document = self.load('<cim:Breaker rdf:ID="B1"><cim:Switch.open>1</cim:Switch.open></cim:Breaker>')
+        self.assertEqual(document.network.get("B1").state, "OPEN")
+
+
 class FailureTests(unittest.TestCase):
     def test_a_doctype_is_refused(self):
         with self.assertRaises(CimImportError) as raised:
@@ -408,6 +516,27 @@ class CommandLineTests(unittest.TestCase):
         code, out, _ = self.run_cli(["import-cim", str(path)])
         self.assertEqual(code, 0)
         self.assertIn("imported 11 devices", out)
+
+    def test_a_repeated_description_does_not_crash_the_command(self):
+        path = self.directory / "grid.xml"
+        path.write_text(
+            RepeatedDescriptionTests.HEAD
+            + '<cim:Breaker rdf:ID="B1"/><cim:Breaker rdf:about="#B1"/>\n</rdf:RDF>'
+        )
+        code, out, _ = self.run_cli(["import-cim", str(path)])
+        self.assertEqual(code, 0)
+        self.assertIn("imported 1 devices", out)
+
+    def test_import_without_a_database_shows_findings_inline(self):
+        # 'gridql validate' cannot read a CIM file, so it must not be offered.
+        path = self.directory / "grid.xml"
+        path.write_text(
+            RepeatedDescriptionTests.HEAD + '<cim:Breaker rdf:ID="B1"/>\n</rdf:RDF>'
+        )
+        code, out, _ = self.run_cli(["import-cim", str(path)])
+        self.assertEqual(code, 0)
+        self.assertIn("unassigned-device", out)
+        self.assertNotIn("gridql validate", out)
 
     def test_import_into_a_database_then_query_it(self):
         xml = self.directory / "grid.xml"

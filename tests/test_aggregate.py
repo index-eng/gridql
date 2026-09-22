@@ -117,6 +117,16 @@ class GroupByTests(unittest.TestCase):
             self.rows("FIND loads SELECT mrid, SUM(kw) GROUP BY feeder")
         self.assertIn("add it to GROUP BY", str(raised.exception))
 
+    def test_ordering_groups_by_an_ungrouped_column_is_refused(self):
+        # A group has no single kva to sort by; silently not sorting is worse.
+        with self.assertRaises(GridQLError) as raised:
+            self.rows("FIND transformers GROUP BY feeder ORDER BY kva DESC")
+        self.assertIn("add it to GROUP BY", str(raised.exception))
+
+    def test_ordering_groups_by_a_grouped_column_still_works(self):
+        keys = [row["feeder"] for row in self.rows("FIND devices GROUP BY feeder ORDER BY FEEDER DESC")]
+        self.assertEqual(keys, ["FDR-B", "FDR-A"])
+
     def test_an_aggregate_without_grouping_needs_no_group_clause(self):
         self.assertEqual(self.rows("FIND loads SELECT SUM(kw)"), [{"SUM(kw)": 495.0}])
 

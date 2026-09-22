@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 from xml.etree import ElementTree as ET
 
+from ..errors import GridQLError
 from ..version import __version__
 from ..model import (
     Capacitor,
@@ -51,6 +52,10 @@ from .vocabulary import (
     tag,
     xml_id,
 )
+
+
+class CimExportError(GridQLError):
+    """The network cannot be written as a valid CIM document."""
 
 
 def export_summary(
@@ -117,6 +122,7 @@ def export_network(
             _ref(terminal, CIM_NS, "Terminal.ConductingEquipment", device_mrid)
             _ref(terminal, CIM_NS, "Terminal.ConnectivityNode", node)
 
+    _check_unique_ids(root)
     ET.indent(root, space="  ")
     document = ET.tostring(root, encoding="unicode", xml_declaration=True)
     if path is not None:
@@ -194,6 +200,9 @@ def _write_device(root: ET.Element, selection: _Selection, device: Device) -> No
 
     if device.feeder and device.feeder in selection.by_mrid:
         _ref(element, CIM_NS, "Equipment.EquipmentContainer", device.feeder)
+    elif device.substation and device.substation in selection.by_mrid:
+        # Station equipment on no feeder is contained by the substation.
+        _ref(element, CIM_NS, "Equipment.EquipmentContainer", device.substation)
     _base_voltage(element, selection, device.voltage)
 
     if device.phases:
@@ -306,11 +315,37 @@ def _base_voltage_id(kilovolts: float) -> str:
 
 
 def _node_id(first: str, second: str) -> str:
-    return f"CN_{xml_id(first)}_{xml_id(second)}"
+    return f"CN_{_pair(first, second)}"
 
 
 def _terminal_id(device: str, other: str) -> str:
-    return f"T_{xml_id(device)}_{xml_id(other)}"
+    return f"T_{_pair(device, other)}"
+
+
+def _pair(first: str, second: str) -> str:
+    """Two identifiers joined so the join cannot be read two ways.
+
+    Plain ``a_b`` would give ``X_Y`` + ``Z`` and ``X`` + ``Y_Z`` the same
+    node; leading with the first one's length keeps them apart.
+    """
+    head = xml_id(first)
+    return f"{len(head)}_{head}_{xml_id(second)}"
+
+
+def _check_unique_ids(root: ET.Element) -> None:
+    """Refuse to write a document in which two resources share an rdf:ID."""
+    seen: dict[str, str] = {}
+    for element in root:
+        identifier = element.get(tag(RDF_NS, "ID"))
+        if identifier is None:
+            continue
+        mrid = element.findtext(tag(CIM_NS, "IdentifiedObject.mRID"), default=identifier)
+        if identifier in seen:
+            raise CimExportError(
+                f"'{seen[identifier]}' and '{mrid}' would share rdf:ID '{identifier}' "
+                "in the CIM document; rename one of them"
+            )
+        seen[identifier] = mrid
 
 
 def register_namespaces() -> None:

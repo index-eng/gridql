@@ -83,7 +83,7 @@ def tokenize(source: str) -> list[Token]:
         # be a sign here, since identifiers never start with one.
         if char in _DIGITS or (char == "-" and index + 1 < length and source[index + 1] in _DIGITS):
             value, unit, index = _read_number(source, index)
-            tokens.append(Token(TokenKind.NUMBER, value, start, unit))
+            tokens.append(Token(TokenKind.NUMBER, value, start, unit, source[start:index]))
             continue
 
         if char in _IDENT_START:

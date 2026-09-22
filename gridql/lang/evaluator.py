@@ -57,6 +57,25 @@ def _value(network: Network, obj: GridObject, name: str, distances) -> Any:
     return network.attribute(obj, name)
 
 
+def _tested(node: Node | None) -> list[str]:
+    """The attributes a WHERE clause tests, as written -- not its operands.
+
+    A bare word on the right may be a value (``state = OPEN``), so only the
+    left-hand side is certain to name an attribute.
+    """
+    found: list[str] = []
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (Compare, In, Contains, Truthy)):
+            found.append(current.attribute)
+        elif isinstance(current, (And, Or)):
+            stack.extend((current.right, current.left))
+        elif isinstance(current, Not):
+            stack.append(current.operand)
+    return found
+
+
 def _referenced(node: Node | None) -> set[str]:
     """Every attribute a WHERE clause mentions, on either side."""
     found: set[str] = set()
@@ -193,7 +212,8 @@ def evaluate_script(
 
 def evaluate(network: Network, query: Query) -> Result:
     type_key = resolve_type(query.type_name)
-    objects = network.of_class(class_for(type_key))
+    candidates = network.of_class(class_for(type_key))
+    objects = candidates
 
     # Topology constraints intersect: each one narrows what came before.
     # The first one also fixes what "hops" means and the natural order.
@@ -205,7 +225,9 @@ def evaluate(network: Network, query: Query) -> Result:
         allowed = {obj.mrid for obj in related}
         objects = [obj for obj in objects if obj.mrid in allowed]
 
-    select = _projection(query, type_key, distances, objects)
+    # Checked against every candidate, not only the ones topology kept, so
+    # a utility's own column is known even where this slice lacks it.
+    select = _projection(query, type_key, distances, candidates)
 
     if query.where is not None:
         context = _Context(network, attribute_universe(type_key), distances)
@@ -285,8 +307,13 @@ def _projection(
             SelectItem("COUNT(*)", "*", "count"),
         )
 
+    # A misspelt attribute in WHERE would otherwise match nothing and look
+    # exactly like a real empty answer.
+    for attribute in _tested(query.where):
+        _check_attribute(attribute, known, type_key)
     for column in query.group_by or ():
         _check_attribute(column, known, type_key)
+    grouped = {column.lower() for column in query.group_by or ()}
     for key in query.order_by or ():
         if key.item.attribute != "*":
             _check_attribute(key.item.attribute, known, type_key)
@@ -294,6 +321,17 @@ def _projection(
             raise GridQLError(
                 f"ORDER BY {key.item.written} needs an aggregate query; "
                 "add the aggregate to SELECT or group the query"
+            )
+        if (
+            query.is_aggregate
+            and not key.item.is_aggregate
+            and key.item.attribute.lower() not in grouped
+        ):
+            # Each row stands for a whole group, which has no single value
+            # of an ungrouped attribute to sort by.
+            raise GridQLError(
+                f"cannot ORDER BY {key.item.written}: it is neither an aggregate "
+                "nor grouped; add it to GROUP BY or wrap it in an aggregate"
             )
 
     if select is None:
@@ -524,7 +562,7 @@ def _test(node: Node, obj: GridObject, context: _Context) -> bool:
             return False
         if isinstance(left, (list, tuple, set, frozenset)):
             return any(_compare(item, "=", right) for item in left)
-        return str(right).casefold() in str(left).casefold()
+        return _as_text(right).casefold() in _as_text(left).casefold()
 
     raise TypeError(f"cannot evaluate node {node!r}")
 
@@ -540,9 +578,13 @@ def _operand(node: Node, obj: GridObject, context: _Context, attribute: str) -> 
         return node.value
 
     if isinstance(node, Quantity):
+        target_unit = canonical_unit(attribute)
+        if target_unit is None and node.text is not None:
+            # A supplied value meeting an attribute that takes no unit is read
+            # as it was written: --name 12A is a name, and 0412 is not 412.
+            return node.text
         if node.unit is None:
             return node.value
-        target_unit = canonical_unit(attribute)
         if target_unit is None:
             raise UnitError(f"attribute '{attribute}' does not take a unit like '{node.unit}'")
         return convert(node.value, node.unit, target_unit)
@@ -600,6 +642,13 @@ def _ordered(left: Any, operator: str, right: Any) -> bool:
     if operator == "<":
         return left < right
     return left <= right
+
+
+def _as_text(value: Any) -> str:
+    """A value as text to search in: 104, not the 104.0 a float would print."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def _as_number(value: Any, fallback: Any) -> Any:

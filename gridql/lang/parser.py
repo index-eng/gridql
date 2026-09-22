@@ -200,7 +200,9 @@ class _Parser:
             return Literal(str(token.value))
         if token.kind is TokenKind.NUMBER:
             self.advance()
-            return Quantity(float(token.value), token.unit)
+            # Kept with its spelling: a default is a supplied value like any
+            # other, so PARAM feeder = 0412 names device 0412, not 412.
+            return Quantity(float(token.value), token.unit, token.text)
         if token.kind is TokenKind.IDENT:
             self.advance()
             if token.is_keyword("TRUE"):

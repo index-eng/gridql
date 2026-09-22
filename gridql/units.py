@@ -58,6 +58,11 @@ def lookup(unit: str) -> tuple[str, float]:
         raise UnitError(f"unknown unit '{unit}'") from None
 
 
+def is_unit(unit: str) -> bool:
+    """True when ``unit`` is one this module can convert."""
+    return unit.lower() in _UNITS
+
+
 def convert(value: float, from_unit: str, to_unit: str) -> float:
     """Convert ``value`` between two units of the same dimension."""
     from_dimension, from_factor = lookup(from_unit)

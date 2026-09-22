@@ -102,7 +102,20 @@ def _extension_for(device: Device) -> tuple[str, tuple[str, ...]] | None:
 
 
 def save_network(network: Network, target: str | Path | sqlite3.Connection) -> None:
-    """Write a whole network to SQLite, replacing whatever was there."""
+    """Write a whole network to SQLite, replacing whatever was there.
+
+    A network the schema cannot hold is refused before anything is written,
+    naming what is wrong, rather than failing on a bare constraint error.
+    """
+    unstorable = _unstorable(network)
+    if unstorable:
+        shown = "; ".join(unstorable[:5])
+        more = f"; and {len(unstorable) - 5} more" if len(unstorable) > 5 else ""
+        raise StorageError(
+            f"cannot save this network: {shown}{more}. "
+            "Fix the model ('gridql validate' reports it in full) and save again"
+        )
+
     owned = not isinstance(target, sqlite3.Connection)
     connection = connect(target) if owned else target
     try:
@@ -118,6 +131,38 @@ def save_network(network: Network, target: str | Path | sqlite3.Connection) -> N
     finally:
         if owned:
             connection.close()
+
+
+def _unstorable(network: Network) -> list[str]:
+    """What the schema's foreign keys and checks would reject."""
+    problems: list[str] = []
+
+    def check(owner: str, kind: str, named: str | None, expected: type) -> None:
+        if named is None:
+            return
+        target = network.objects.get(named)
+        if target is None:
+            problems.append(f"{owner} names {kind} '{named}', which does not exist")
+        elif not isinstance(target, expected):
+            problems.append(f"{owner} names {kind} '{named}', which is a {target.TYPE}")
+
+    for feeder in network.feeders:
+        check(feeder.mrid, "substation", feeder.substation, Substation)
+    for device in network.devices:
+        check(device.mrid, "feeder", device.feeder, Feeder)
+        check(device.mrid, "substation", device.substation, Substation)
+
+    for mrid in sorted(network.objects):
+        for neighbor in sorted(network.neighbors(mrid)):
+            if neighbor == mrid:
+                problems.append(f"{mrid} is connected to itself")
+            elif mrid < neighbor:
+                for end in (mrid, neighbor):
+                    if not isinstance(network.objects.get(end), Device):
+                        problems.append(
+                            f"{mrid} is connected to {neighbor}, but {end} is not equipment"
+                        )
+    return problems
 
 
 def _clear(connection: sqlite3.Connection) -> None:
@@ -288,12 +333,17 @@ def _build_device(row: sqlite3.Row, extensions: dict[str, dict[str, Any]]) -> De
 def object_counts(source: str | Path | sqlite3.Connection) -> dict[str, int]:
     """Row counts per table, for a quick look at what a database holds."""
     owned = not isinstance(source, sqlite3.Connection)
+    # Checked first: sqlite3.connect would create the file it was asked to read.
+    if owned and not Path(source).exists():  # type: ignore[arg-type]
+        raise StorageError(f"no such database: {source}")
     connection = connect(source) if owned else source
     try:
         return {
             table: connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
             for table in ("substations", "feeders", "devices", "connections")
         }
+    except sqlite3.Error as error:
+        raise StorageError(f"could not read {source}: {error}") from error
     finally:
         if owned:
             connection.close()

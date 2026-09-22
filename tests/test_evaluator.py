@@ -123,9 +123,23 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(self.run_query('FIND devices WHERE feeder = "FDR-104" AND type = fuse'), [])
 
     def test_attribute_the_object_lacks_never_matches(self):
-        # Loads have no kVA rating, so neither the test nor its negation matches.
-        self.assertEqual(self.run_query("FIND loads WHERE kva >= 0"), [])
-        self.assertEqual(self.run_query("FIND loads WHERE kva != 0"), [])
+        # Only transformers carry a kVA rating, so for every other device
+        # neither the test nor its negation matches.
+        self.assertEqual(self.run_query("FIND devices WHERE kva >= 0"), ["XFMR-001", "XFMR-002"])
+        self.assertEqual(self.run_query("FIND devices WHERE kva != 0"), ["XFMR-001", "XFMR-002"])
+
+    def test_attribute_the_type_cannot_have_is_an_error_not_an_empty_answer(self):
+        # A misspelt attribute would otherwise look exactly like "none match".
+        with self.assertRaises(GridQLNameError) as raised:
+            self.run_query("FIND transformers WHERE kvaa >= 500")
+        self.assertIn("kva", raised.exception.suggestions)
+        with self.assertRaises(GridQLNameError):
+            self.run_query("FIND loads WHERE kva >= 0")  # loads have kvar, not kva
+        with self.assertRaises(GridQLNameError):
+            self.run_query("FIND switches WHERE NOT (state = OPEN OR energised)")
+
+    def test_a_bare_word_value_on_the_right_is_not_checked_as_an_attribute(self):
+        self.assertEqual(self.run_query("FIND switches WHERE state = OPEN"), ["SW-002", "TIE-001"])
 
     def test_subclass_attributes_are_queryable_through_the_base_type(self):
         self.assertEqual(self.run_query("FIND devices WHERE kva >= 500"), ["XFMR-001"])

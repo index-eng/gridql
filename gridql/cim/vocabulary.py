@@ -17,6 +17,7 @@ through this package:
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from ..model import (
@@ -40,6 +41,21 @@ RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 GRIDQL_NS = "urn:gridql:extension#"
 
 NAMESPACES = {"cim": CIM_NS, "rdf": RDF_NS, "gridql": GRIDQL_NS}
+
+#: Every CIM release has its own namespace -- cim16's dated URI, then
+#: ``http://iec.ch/TC57/CIM100#`` from CIM17 on. The classes and properties
+#: this package reads are the same in all of them, so any is accepted.
+_CIM_NAMESPACE = re.compile(
+    r"^http://iec\.ch/TC57/(?:\d{4}/)?CIM-schema-cim\d+#$|^http://iec\.ch/TC57/CIM\d+#$"
+)
+
+#: The header namespace of IEC 61970-552 files (md:FullModel). Expected, and
+#: carries nothing about the network.
+MODEL_DESCRIPTION_PREFIX = "http://iec.ch/TC57/61970-552/ModelDescription/"
+
+
+def is_cim_namespace(namespace: str) -> bool:
+    return namespace == CIM_NS or bool(_CIM_NAMESPACE.match(namespace))
 
 #: CIM classes this importer understands, including the specialisations other
 #: tools commonly emit for things the model keeps as one class.
@@ -107,14 +123,21 @@ _NCNAME_BAD = re.compile(r"[^A-Za-z0-9_.\-]")
 def xml_id(mrid: str) -> str:
     """An mRID as a valid ``rdf:ID``.
 
-    Most utility mRIDs already qualify. One that does not is adjusted here,
-    and the true mRID still travels in ``cim:IdentifiedObject.mRID``, so
-    import recovers it exactly.
+    Most utility mRIDs already qualify and are used unchanged. One that does
+    not is adjusted here, and the true mRID still travels in
+    ``cim:IdentifiedObject.mRID``, so import recovers it exactly.
+
+    An adjusted identifier carries a digest of the original, so two mRIDs
+    that clean to the same text -- ``SW 1`` and ``SW_1``, or ``123`` and
+    ``_123`` -- cannot end up sharing one rdf:ID.
     """
     cleaned = _NCNAME_BAD.sub("_", mrid)
     if not cleaned or not _NCNAME_START.match(cleaned[0]):
         cleaned = f"_{cleaned}"
-    return cleaned
+    if cleaned == mrid:
+        return mrid
+    digest = hashlib.sha1(mrid.encode("utf-8")).hexdigest()[:8]
+    return f"{cleaned}_{digest}"
 
 
 def strip_reference(value: str) -> str:

@@ -22,7 +22,7 @@ import difflib
 from typing import Any, Mapping
 
 from ..errors import ParameterError
-from ..units import split_quantity
+from ..units import is_unit, split_quantity
 from .ast import (
     And,
     Compare,
@@ -52,14 +52,20 @@ def coerce(value: Any) -> Node:
 
     text = str(value)
     number = split_quantity(text)
-    if number is not None:
-        return Quantity(*number)
-    return Literal(text)
+    if number is None:
+        return Literal(text)
+    amount, unit = number
+    if unit is not None and not is_unit(unit):
+        # "12 Main" is a name that happens to start with a number.
+        return Literal(text)
+    return Quantity(amount, unit, text.strip())
 
 
 def text_of(node: Node) -> str:
     """The plain text of a bound value, for the places that need a name."""
     if isinstance(node, Quantity):
+        if node.text is not None:
+            return node.text
         number = f"{node.value:.6f}".rstrip("0").rstrip(".") or "0"
         return f"{number}{node.unit or ''}"
     if isinstance(node, Literal):

@@ -180,6 +180,44 @@ class FailureTests(StorageTestCase):
         with self.assertRaises(StorageError):
             load_network(path)
 
+    def test_counting_a_missing_database_neither_creates_it_nor_leaks_sqlite(self):
+        path = self.directory / "nope.sqlite"
+        with self.assertRaises(StorageError):
+            object_counts(path)
+        self.assertFalse(path.exists())
+
+    def test_counting_a_file_that_is_not_a_gridql_database(self):
+        path = self.directory / "random.sqlite"
+        sqlite3.connect(path).close()
+        with self.assertRaises(StorageError):
+            object_counts(path)
+
+    def test_a_dangling_container_is_named_rather_than_a_bare_constraint(self):
+        self.network.get("FDR-104").substation = "SUB-GHOST"
+        with self.assertRaises(StorageError) as raised:
+            save_network(self.network, self.path)
+        self.assertIn("SUB-GHOST", str(raised.exception))
+        self.assertNotIn("FOREIGN KEY", str(raised.exception))
+
+    def test_a_self_connection_is_named_rather_than_a_bare_constraint(self):
+        self.network.connect("BRK-001", "BRK-001")
+        with self.assertRaises(StorageError) as raised:
+            save_network(self.network, self.path)
+        self.assertIn("BRK-001 is connected to itself", str(raised.exception))
+
+    def test_a_connection_to_a_container_is_named(self):
+        self.network.connect("BRK-001", "SUB-001")
+        with self.assertRaises(StorageError) as raised:
+            save_network(self.network, self.path)
+        self.assertIn("SUB-001 is not equipment", str(raised.exception))
+
+    def test_a_refused_save_leaves_the_existing_database_alone(self):
+        save_network(self.network, self.path)
+        self.network.connect("BRK-001", "BRK-001")
+        with self.assertRaises(StorageError):
+            save_network(self.network, self.path)
+        self.assertEqual(len(load_network(self.path).devices), 11)
+
     def test_a_schema_version_this_build_does_not_know(self):
         save_network(self.network, self.path)
         with open_database(self.path) as connection:

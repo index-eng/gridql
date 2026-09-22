@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gridql import Network, build_sample_network, execute, load_network
+from gridql import Network, build_sample_network, execute, load_network, save_network
 from gridql.cli import main
 from gridql.ingest import CsvError, read_csv, write_csv
 from gridql.model import Device, Switch, Transformer
@@ -76,6 +76,30 @@ class RoundTripTests(CsvTestCase):
         back = read_csv(self.directory).network
         self.assertEqual(back.get("BRK-9").extras, {"install_year": 1998, "pole": "00412"})
 
+    def test_feeder_and_substation_extras_survive_the_round_trip(self):
+        self.write("substations.csv", "mrid,region\nSUB-1,North\n")
+        self.write("feeders.csv", "mrid,substation,miles\nFDR-1,SUB-1,12.5\n")
+        self.write("devices.csv", "mrid,type,feeder\nBRK-1,breaker,FDR-1\n")
+        network = self.load().network
+        out = self.directory / "out"
+        write_csv(network, out)
+        back = read_csv(out).network
+        self.assertEqual(back.get("SUB-1").extras, {"region": "North"})
+        self.assertEqual(back.get("FDR-1").extras, {"miles": 12.5})
+
+    def test_an_extra_sharing_a_column_name_is_written_once(self):
+        # The widget is generic equipment, so its kva is an extra -- the same
+        # name as the transformer's own column.
+        self.write("devices.csv", "mrid,type,feeder,kva\nX1,transformer,F1,500\nG1,widget,F1,25\n")
+        network = self.load().network
+        out = self.directory / "out"
+        write_csv(network, out)
+        header = (out / "devices.csv").read_text().splitlines()[0].split(",")
+        self.assertEqual(header.count("kva"), 1)
+        back = read_csv(out).network
+        self.assertEqual(back.get("X1").kva, 500.0)
+        self.assertEqual(back.get("G1").extras["kva"], 25)
+
 
 class HeaderTests(CsvTestCase):
     def test_real_world_column_names_are_understood(self):
@@ -139,6 +163,15 @@ C,xfmr
         self.assertEqual(network.get("A").TYPE, "recloser")
         self.assertEqual(network.get("B").TYPE, "recloser")
         self.assertIsInstance(network.get("C"), Transformer)
+
+    def test_a_capacitor_keeps_its_recorded_position(self):
+        self.write(
+            "devices.csv",
+            "mrid,type,feeder,state,normal_state,kvar\nCAP-1,capacitor,F1,open,CLOSED,600\n",
+        )
+        capacitor = self.load().network.get("CAP-1")
+        self.assertEqual((capacitor.state, capacitor.normal_state), ("OPEN", "CLOSED"))
+        self.assertNotIn("state", capacitor.extras)
 
     def test_cim_class_names_from_a_gis_export(self):
         self.write("devices.csv", """
@@ -217,6 +250,16 @@ BRK-2,breaker,FDR-1
         document = self.load()
         self.assertTrue(any("GHOST" in n for n in document.report.notes))
 
+    def test_a_substation_only_a_feeder_names_is_created(self):
+        # Otherwise the feeder points at nothing and saving it fails.
+        self.write("feeders.csv", "mrid,substation\nFDR-1,SUB-X\n")
+        self.write("devices.csv", "mrid,type,feeder\nBRK-1,breaker,FDR-1\n")
+        network = self.load().network
+        self.assertIn("SUB-X", network)
+        database = self.directory / "grid.sqlite"
+        save_network(network, database)
+        self.assertEqual(load_network(database).get("FDR-1").substation, "SUB-X")
+
 
 class BadRowTests(CsvTestCase):
     def test_rows_without_an_mrid_are_skipped(self):
@@ -250,6 +293,22 @@ class BadRowTests(CsvTestCase):
         document = self.load()
         self.assertEqual(document.report.connections, 0)
         self.assertTrue(any("itself" in p for p in document.report.problems))
+
+    def test_a_connection_to_a_container_is_refused(self):
+        self.write("devices.csv", "mrid,type,feeder\nA,switch,FDR-1\n")
+        self.write("connections.csv", "from,to\nA,FDR-1\n")
+        document = self.load()
+        self.assertEqual(document.report.connections, 0)
+        self.assertTrue(any("not equipment" in p for p in document.report.problems))
+
+    def test_a_duplicate_feeder_or_substation_row_is_skipped(self):
+        self.write("substations.csv", "mrid\nSUB-1\nSUB-1\n")
+        self.write("feeders.csv", "mrid\nFDR-1\nFDR-1\nSUB-1\n")
+        self.write("devices.csv", "mrid,type,feeder\nBRK-1,breaker,FDR-1\n")
+        document = self.load()
+        self.assertEqual(len(document.network.feeders), 1)
+        self.assertEqual(len(document.network.substations), 1)
+        self.assertEqual(sum("duplicate" in p for p in document.report.problems), 3)
 
     def test_blank_rows_are_ignored(self):
         self.write("devices.csv", "mrid,type\nA,switch\n\n\nB,switch\n")

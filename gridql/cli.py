@@ -549,12 +549,17 @@ def import_cim(path: str, db: str | None = None, force: bool = False) -> str:
     lines = [document.report.summary()]
 
     report = validate(document.network)
-    where = f" --db {db}" if db else ""
-    lines.append(
-        "validation: no problems found"
-        if not report
-        else f"validation: {report.counts()} -- run 'gridql validate{where}' for detail"
-    )
+    if not report:
+        lines.append("validation: no problems found")
+    elif db is not None:
+        lines.append(
+            f"validation: {report.counts()} -- run 'gridql validate --db {db}' for detail"
+        )
+    else:
+        # 'gridql validate' cannot read a CIM file, so pointing there would
+        # validate some other network. Show the findings here instead.
+        lines.append(f"validation: {report.counts()}")
+        lines.extend(f"  {finding}" for finding in report.errors + report.warnings)
 
     if db is not None:
         if Path(db).exists() and not force:

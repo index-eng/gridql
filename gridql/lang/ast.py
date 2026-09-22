@@ -34,10 +34,17 @@ class Literal(Node):
 
 @dataclass(frozen=True)
 class Quantity(Node):
-    """A number, optionally carrying the unit it was written with."""
+    """A number, optionally carrying the unit it was written with.
+
+    ``text`` is the value exactly as a parameter supplied it (``0412``,
+    ``12A``). It is kept because a supplied value is only a number when the
+    attribute it meets is one -- used as a device name, ``0412`` must not
+    become ``412``.
+    """
 
     value: float
     unit: str | None = None
+    text: str | None = field(default=None, compare=False)
 
     def describe(self) -> str:
         return f"{self.value}{self.unit or ''}"

@@ -66,6 +66,8 @@ class Token:
     value: Any
     position: int
     unit: str | None = None
+    #: A number's spelling as written, units and leading zeros included.
+    text: str | None = None
 
     @property
     def keyword(self) -> str | None:
