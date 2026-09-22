@@ -98,6 +98,11 @@ class Feeder(GridObject):
         if self.head is None:
             self.head = device.mrid
         else:
+            if after is _SERIES and self.last is None:
+                raise RuntimeError(
+                    f"feeder {self.mrid} was loaded from storage, so there is no "
+                    f"'previous device' to chain {device.mrid} onto; pass after=..."
+                )
             target = self.last if after is _SERIES else after
             if target is not None:
                 target_mrid = target.mrid if isinstance(target, GridObject) else str(target)

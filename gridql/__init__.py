@@ -11,6 +11,7 @@ from .formats import render, render_script
 from .lang import Result, Script, evaluate, evaluate_script, execute, execute_script, parse, parse_script
 from .model import Network
 from .script import read_script, run_file
+from .storage import load_network, save_network
 
 __version__ = "0.1.0"
 
@@ -28,10 +29,12 @@ __all__ = [
     "evaluate_script",
     "execute",
     "execute_script",
+    "load_network",
     "parse",
     "parse_script",
     "read_script",
     "render",
     "render_script",
     "run_file",
+    "save_network",
 ]

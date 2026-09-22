@@ -26,6 +26,8 @@ python3 -m gridql.cli 'FIND reclosers'                 # one-shot query
 python3 -m gridql.cli --format json 'FIND loads'       # table (default), json or csv
 python3 -m gridql.cli --explain 'FIND devices DOWNSTREAM OF "REC-001"'
 python3 -m gridql.cli run queries/feeder_analysis.gridql   # run a saved query
+python3 -m gridql.cli init grid.sqlite                 # create a database
+python3 -m gridql.cli --db grid.sqlite 'FIND feeders'  # query it
 python3 -m unittest discover -s tests                  # the test suite
 ```
 
@@ -204,16 +206,55 @@ feeder.add_load("LOAD-001", kw=310)
 
 See `gridql/data/sample.py` for the full sample feeder, FDR-104.
 
+## Persistence
+
+A network can be stored in SQLite and loaded back identically — same objects, same connectivity,
+same feeder heads, so topology is restored rather than re-guessed.
+
+```bash
+gridql init grid.sqlite                       # schema + the sample network
+gridql --db grid.sqlite 'FIND reclosers'
+gridql run queries/open_devices.gridql --db grid.sqlite
+```
+
+With no `--db`, everything runs against the bundled sample feeder. `gridql init` refuses to
+overwrite an existing file unless you pass `--force`, and `--empty` creates the schema alone.
+
+```python
+from gridql import build_sample_network, load_network, save_network
+
+save_network(build_sample_network(), "grid.sqlite")
+network = load_network("grid.sqlite")          # the NetworkLoader
+```
+
+**Schema.** Class-table inheritance, as sketched in `idea.md`: every piece of equipment has a row
+in `devices`, and types with extra attributes have a matching row in an extension table keyed by
+the same mRID (`transformers`, `switches`, `lines`, `loads`, `capacitors`), plus `substations`,
+`feeders` and `connections`. That mirrors how CIM specialises `ConductingEquipment`. mRIDs are the
+primary keys — a surrogate id would earn nothing here. Connectivity is undirected and each edge is
+stored once with the lower mRID first, enforced by a `CHECK`, so a circuit cannot accumulate
+mirrored duplicates. Attributes outside the schema ride along in a JSON `extras` column and stay
+queryable. See [`gridql/storage/schema.sql`](gridql/storage/schema.sql).
+
+**Loading reads everything once** and builds the in-memory graph. That is the trade the design
+calls for: SQLite provides durability while traversal stays in memory, so `DOWNSTREAM OF` is a
+graph walk rather than a recursive CTE. If scale ever demands otherwise, the loader changes and
+the language does not.
+
+A feeder restored from storage knows its head but has no "last added" device, so calling
+`feeder.add_switch("SW-NEW")` without `after=` raises rather than quietly leaving the new device
+unconnected.
+
 ## Architecture
 
 ```
-            GridQL            gridql/lang   -- lexer, parser, AST, evaluator
+            GridQL            gridql/lang     -- lexer, parser, AST, evaluator
                |
-      Semantic Model API      gridql/model  -- devices, feeders, substations
+      Semantic Model API      gridql/model    -- devices, feeders, substations
                |
          Graph Model          gridql/model/network.py -- connectivity and traversal
                |
-       (storage goes here)    not yet built
+        SQLite storage        gridql/storage  -- schema and the NetworkLoader
 ```
 
 The language only ever calls the semantic model's public API, and the model knows nothing about
@@ -225,9 +266,9 @@ Every class records the CIM class it maps to (`reclosers` → `ProtectedSwitch`,
 
 ## Not built yet
 
-SQLite persistence, CIM import/export, GeoJSON output, CSV/JSON input loaders, and the editor —
-steps 4 through 6 of the design in `idea.md`. The loader seam and the CIM class annotations are in
-place so none of them require reworking the language.
+CIM import/export, GeoJSON output, CSV/JSON input loaders, and the editor — steps 5 and 6 of the
+design in `idea.md`. The CIM class annotations are already in place, so export builds on what the
+model records rather than requiring changes to it.
 
 From the `.gridql` section of the design, still to come: parameterized queries
 (`gridql run export_feeder.gridql --feeder FDR-104`, planned as a `PARAM feeder = "FDR-104"`

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from . import __version__
 from .data import build_sample_network
@@ -13,6 +14,7 @@ from .lang import Result, evaluate, parse
 from .model import Network
 from .model.types import class_for
 from .script import run_file
+from .storage import load_network, object_counts, save_network
 
 _BANNER = f"""GridQL {__version__} -- sample network FDR-104 loaded.
 Type a query, '.help' for help, or '.quit' to exit."""
@@ -37,7 +39,10 @@ Commands:   .help  .types  .format <table|json|csv>  .run <file.gridql>  .quit""
 _EPILOG = """examples:
   gridql 'FIND reclosers'
   gridql --format json 'FIND transformers WHERE kva >= 500'
-  gridql run queries/large_transformers.gridql"""
+  gridql run queries/large_transformers.gridql
+  gridql init grid.sqlite && gridql --db grid.sqlite 'FIND feeders'
+
+With no --db, queries run against the bundled sample feeder FDR-104."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,6 +85,17 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="show the parsed query and the plan alongside the result",
     )
+    parser.add_argument(
+        "--db",
+        metavar="PATH",
+        default=None,
+        help="query a GridQL SQLite database instead of the bundled sample network",
+    )
+
+
+def network_for(db: str | None) -> Network:
+    """The network a command runs against: a database, or the sample."""
+    return build_sample_network() if db is None else load_network(db)
 
 
 def explain(network: Network, result: Result, output_format: str | None) -> str:
@@ -126,8 +142,34 @@ def run_script(
     return render_script(results, output_format)
 
 
-def repl(network: Network, output_format: str | None) -> int:
-    print(_BANNER)
+def build_init_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gridql init",
+        description="Create a GridQL SQLite database holding the sample network.",
+    )
+    parser.add_argument("path", help="database file to create")
+    parser.add_argument(
+        "--empty", action="store_true", help="create the schema without any network"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="overwrite the file if it already exists"
+    )
+    return parser
+
+
+def init_database(path: str, empty: bool = False, force: bool = False) -> str:
+    if Path(path).exists() and not force:
+        raise GridQLError(f"{path} already exists; pass --force to overwrite it")
+
+    network = Network() if empty else build_sample_network()
+    save_network(network, path)
+    counts = object_counts(path)
+    written = ", ".join(f"{count} {table}" for table, count in counts.items() if count)
+    return f"wrote {written or 'an empty schema'} to {path}"
+
+
+def repl(network: Network, output_format: str | None, source: str = "sample network FDR-104") -> int:
+    print(_BANNER.replace("sample network FDR-104", source))
     while True:
         try:
             line = input("gridql> ").strip()
@@ -184,16 +226,30 @@ def _emit(produce) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
-    network = build_sample_network()
+
+    if argv and argv[0] == "init":
+        args = build_init_parser().parse_args(argv[1:])
+        return _emit(lambda: init_database(args.path, args.empty, args.force))
 
     if argv and argv[0] == "run":
         args = build_run_parser().parse_args(argv[1:])
-        return _emit(lambda: run_script(network, args.file, args.format, args.explain))
+        return _emit(
+            lambda: run_script(network_for(args.db), args.file, args.format, args.explain)
+        )
 
     args = build_parser().parse_args(argv)
+
     if args.query is None:
-        return repl(network, args.format)
-    return _emit(lambda: run_query(network, args.query, args.format, args.explain))
+        try:
+            network = network_for(args.db)
+        except GridQLError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        return repl(network, args.format, args.db or "sample network FDR-104")
+
+    return _emit(
+        lambda: run_query(network_for(args.db), args.query, args.format, args.explain)
+    )
 
 
 if __name__ == "__main__":

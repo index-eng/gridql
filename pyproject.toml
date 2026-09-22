@@ -26,3 +26,4 @@ include = ["gridql*"]
 
 [tool.setuptools.package-data]
 gridql = ["py.typed"]
+"gridql.storage" = ["schema.sql"]
