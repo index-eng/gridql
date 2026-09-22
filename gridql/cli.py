@@ -16,6 +16,7 @@ from .model.types import class_for
 from .cim import export_network, export_summary, read_cim
 from .script import run_file
 from .storage import load_network, object_counts, save_network
+from .validate import validate
 
 _BANNER = f"""GridQL {__version__} -- sample network FDR-104 loaded.
 Type a query, '.help' for help, or '.quit' to exit."""
@@ -35,7 +36,7 @@ Units:      13.8kV, 500kVA, 0.5MVA -- bare numbers use the attribute's own unit
 
 Save a query as a .gridql file and run it with:  gridql run queries/foo.gridql
 
-Commands:   .help  .types  .format <table|json|csv>  .run <file.gridql>  .quit"""
+Commands:   .help  .types  .format <...>  .run <file.gridql>  .validate  .quit"""
 
 _EPILOG = """examples:
   gridql 'FIND reclosers'
@@ -44,6 +45,7 @@ _EPILOG = """examples:
   gridql init grid.sqlite && gridql --db grid.sqlite 'FIND feeders'
   gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
   gridql import-cim feeder.xml --db imported.sqlite
+  gridql validate --db grid.sqlite
 
 With no --db, queries run against the bundled sample feeder FDR-104."""
 
@@ -204,6 +206,32 @@ def build_import_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_validate_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gridql validate",
+        description="Check a network for the conditions that make its answers unreliable.",
+    )
+    parser.add_argument(
+        "--db", metavar="PATH", default=None, help="validate this database"
+    )
+    parser.add_argument(
+        "--strict", action="store_true", help="exit non-zero on warnings as well as errors"
+    )
+    return parser
+
+
+def run_validate(db: str | None = None, strict: bool = False) -> int:
+    """Print a validation report. Exit non-zero when the model is unsound."""
+    try:
+        report = validate(network_for(db))
+    except GridQLError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    print(report.summary())
+    return 1 if report.errors or (strict and report.warnings) else 0
+
+
 def export_cim(path: str, query: str | None = None, db: str | None = None) -> str:
     network = network_for(db)
     objects = None if query is None else evaluate(network, parse(query)).objects
@@ -222,6 +250,14 @@ def export_cim(path: str, query: str | None = None, db: str | None = None) -> st
 def import_cim(path: str, db: str | None = None, force: bool = False) -> str:
     document = read_cim(path)
     lines = [document.report.summary()]
+
+    report = validate(document.network)
+    where = f" --db {db}" if db else ""
+    lines.append(
+        "validation: no problems found"
+        if not report
+        else f"validation: {report.counts()} -- run 'gridql validate{where}' for detail"
+    )
 
     if db is not None:
         if Path(db).exists() and not force:
@@ -264,6 +300,9 @@ def repl(network: Network, output_format: str | None, source: str = "sample netw
             else:
                 print(f"usage: .format <{'|'.join(FORMATS)}>")
             continue
+        if lowered == ".validate":
+            print(validate(network).summary())
+            continue
         if lowered.startswith(".run"):
             parts = line.split(maxsplit=1)
             if len(parts) != 2:
@@ -294,6 +333,10 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "init":
         args = build_init_parser().parse_args(argv[1:])
         return _emit(lambda: init_database(args.path, args.empty, args.force))
+
+    if argv and argv[0] == "validate":
+        args = build_validate_parser().parse_args(argv[1:])
+        return run_validate(args.db, args.strict)
 
     if argv and argv[0] == "export-cim":
         args = build_export_parser().parse_args(argv[1:])

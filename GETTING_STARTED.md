@@ -146,7 +146,7 @@ because that is what an engineer means by it, and what CIM says.
 
 | Relation | Asks |
 | --- | --- |
-| `DOWNSTREAM OF "X"` | what is electrically below X |
+| `DOWNSTREAM OF "X"` | what is electrically below X, within its own feeder |
 | `UPSTREAM OF "X"` | what lies between X and the feeder head |
 | `CONNECTED TO "X"` | what touches X directly |
 | `FED BY "X"` | everything X supplies |
@@ -170,6 +170,11 @@ XFMR-002  Maple Ln Bank         transformer
 
 Those two are dark because SW-002 is open. They are still downstream of the recloser, and GridQL
 keeps the two facts apart rather than quietly conflating them.
+
+The two questions are answered differently on purpose. A feeder's tree covers that feeder's own
+equipment and stops at a tie, so one circuit never swallows its neighbour. Energisation ignores
+feeder boundaries and follows the real graph from every source, so closing a tie back-feeds the
+next circuit — which is exactly what you want to ask before you close it.
 
 ### Filters that read like the question
 
@@ -202,6 +207,21 @@ Dimensions are enforced, so `kva >= 500kW` is an error rather than a wrong answe
 ```bash
 gridql --format csv 'FIND transformers SELECT mRID, name, kva'
 ```
+
+### Checking a model before you trust it
+
+Real models arrive with problems. `validate` names them instead of letting a query quietly return
+a plausible wrong answer:
+
+```bash
+gridql validate --db grid.sqlite
+```
+
+**Errors** mean answers will be wrong — a feeder pointing at a substation that does not exist, a
+feeder head belonging to a different feeder, a switch whose state is neither OPEN nor CLOSED.
+**Warnings** mean you will get less than you expect — a loop in a circuit meant to be radial, a
+feeder with no source, an island nothing can reach. Errors exit non-zero; add `--strict` in CI to
+fail on warnings too.
 
 ### Saved queries: .gridql files
 
@@ -279,6 +299,7 @@ save_network(network, "grid.sqlite")
 | `gridql/model/` | the semantic model: equipment, containers, the connectivity graph |
 | `gridql/storage/` | the SQLite schema and loader |
 | `gridql/cim/` | CIM import and export |
+| `gridql/validate.py` | model validation |
 | `gridql/data/sample.py` | the sample feeder, built through the public API |
 | `queries/` | example `.gridql` files |
 | `tests/` | the test suite |

@@ -13,6 +13,7 @@ from .lang import Result, Script, evaluate, evaluate_script, execute, execute_sc
 from .model import Network
 from .script import read_script, run_file
 from .storage import load_network, save_network
+from .validate import Finding, ValidationReport, validate
 from .version import __version__
 
 __all__ = [
@@ -20,9 +21,11 @@ __all__ = [
     "GridQLNameError",
     "GridQLSyntaxError",
     "Network",
+    "Finding",
     "Result",
     "Script",
     "UnitError",
+    "ValidationReport",
     "__version__",
     "build_sample_network",
     "evaluate",
@@ -40,4 +43,5 @@ __all__ = [
     "render_script",
     "run_file",
     "save_network",
+    "validate",
 ]

@@ -83,14 +83,25 @@ containers.
 | `CONNECTED TO "X"` | immediate neighbours of X |
 | `FED BY "X"` | everything X supplies, X included; for a feeder or substation, all of its devices |
 
-Traversal is **topological — it ignores switch state**, so `DOWNSTREAM OF "REC-001"` answers "what
-is physically below this recloser", which is the question being asked when planning work. Whether
-something is currently *energised* is a separate question, answered by the derived `energized`
-attribute:
+Two rules govern traversal, and they are deliberately different.
+
+**A feeder's tree is its own equipment.** Distribution feeders are tied to their neighbours through
+normally open switches, so the physical graph runs across the whole system — a traversal that
+followed it would have one feeder swallow the next. A device belongs to exactly one feeder (CIM
+puts it in exactly one `EquipmentContainer`), so `DOWNSTREAM OF` and `UPSTREAM OF` stay inside that
+feeder and stop at the tie. Adjacency itself is still physical: `CONNECTED TO` reaches across it.
+
+**Traversal ignores switch state**, so `DOWNSTREAM OF "REC-001"` answers "what is physically below
+this recloser", which is the question being asked when planning work. Whether something is
+currently *energised* is a separate question, answered by the derived `energized` attribute:
 
 ```
 FIND devices DOWNSTREAM OF "REC-001" WHERE NOT energized
 ```
+
+Energisation is computed the other way round: it floods from *every* feeder head across the real
+graph, blocked by open switches, ignoring feeder boundaries. That is what makes closing a tie
+back-feed the neighbouring circuit — the question an engineer is actually asking.
 
 Operating a switch updates that immediately — `network.get("SW-001").state = "OPEN"` and the next
 query sees the new answer. The derived topology is cached, but the cache is keyed to the state it
@@ -219,6 +230,48 @@ feeder.add_load("LOAD-001", kw=310)
 
 See `gridql/data/sample.py` for the full sample feeder, FDR-104.
 
+## Validation
+
+A query engine that quietly picks an answer when the model is ambiguous is worse than one that
+refuses, because there is no way to tell the two apart. `validate` surfaces the conditions where
+GridQL would otherwise have to choose:
+
+```bash
+gridql validate                        # the bundled sample
+gridql validate --db grid.sqlite
+gridql validate --db grid.sqlite --strict    # also fail on warnings, for CI
+```
+
+```
+1 error, 1 warning
+
+error   invalid-state          SW-1: state is 'AJAR', expected OPEN or CLOSED
+warning loop                   FDR-1: SW-A and SW-B close a loop; the feeder is not radial,
+                               so upstream and downstream follow one arbitrary path
+```
+
+**Errors** mean the model is broken and answers from it will be wrong — a container that does not
+exist, a container of the wrong kind, a feeder head that belongs to a different feeder, a switch
+state that is neither OPEN nor CLOSED, equipment connected to itself. The exit code is non-zero.
+
+**Warnings** mean the model is readable but something will behave unexpectedly, almost always by
+returning less than you expect — a loop in a circuit meant to be radial, a feeder with no head, an
+island the head cannot reach, equipment on no feeder or with no connections, a hard link between
+two feeders that is not a tie. These exit zero unless you pass `--strict`.
+
+Findings are grouped by cause, so one missing substation is one finding naming the equipment that
+points at it rather than one finding per device. `import-cim` runs the same checks and reports the
+counts, and `.validate` works inside the REPL.
+
+```python
+from gridql import build_sample_network, validate
+
+report = validate(build_sample_network())
+print(report.ok, report.counts())
+for finding in report:
+    print(finding.severity, finding.code, finding.message)
+```
+
 ## Persistence
 
 A network can be stored in SQLite and loaded back identically — same objects, same connectivity,
@@ -325,6 +378,8 @@ network = document.network
         SQLite storage        gridql/storage  -- schema and the NetworkLoader
 
       CIM RDF/XML  <-->  gridql/cim  -- translation to and from the standard
+
+         gridql/validate.py -- what is wrong with a model, and how badly
 ```
 
 The language only ever calls the semantic model's public API, and the model knows nothing about

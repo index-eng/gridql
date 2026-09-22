@@ -184,51 +184,97 @@ class Network:
 
 
 class _Topology:
-    """Derived radial structure: parents, descendants and energisation.
+    """Derived structure: the tree of each feeder, and what is energised.
 
-    Rebuilt lazily whenever the network changes, which keeps the model simple
-    at the scale this is designed for.
+    Two different questions, deliberately answered two different ways.
+
+    **The feeder tree** is scoped to one feeder's own equipment. Distribution
+    feeders are tied to their neighbours through normally open switches, so
+    the physical graph runs right across the whole system; a traversal that
+    followed it would have one feeder swallow the next. A device belongs to
+    exactly one feeder -- CIM puts it in exactly one EquipmentContainer --
+    so the tree for a feeder is built from its own members and stops at the
+    tie. Adjacency stays physical: CONNECTED TO still reaches across it.
+
+    **Energisation** ignores feeder boundaries and follows the real graph
+    from every feeder head, blocked by open switches. That is what makes a
+    closed tie back-feed the neighbouring circuit, which is the question an
+    engineer is actually asking.
+
+    Rebuilt lazily whenever the network changes.
     """
 
     def __init__(self, network: Network) -> None:
         self.parent: dict[str, str | None] = {}
         self.children: dict[str, set[str]] = {}
         self.root: dict[str, str] = {}
+        #: Edges that close a loop inside a feeder. A distribution feeder is
+        #: meant to be radial, so these are reported by validation: the tree
+        #: had to pick one path and the choice is arbitrary.
+        self.loop_edges: list[tuple[str, str]] = []
+        #: Devices on a feeder that its head cannot reach.
+        self.unreachable: set[str] = set()
         self._energized: set[str] = set()
         self._build(network)
 
     def _build(self, network: Network) -> None:
-        # Sorted for deterministic ownership when two feeders share a device.
-        heads = [f.head for f in sorted(network.feeders, key=lambda f: f.mrid) if f.head]
-        seen: set[str] = set()
+        members: dict[str, set[str]] = {}
+        for device in network.devices:
+            if device.feeder is not None:
+                members.setdefault(device.feeder, set()).add(device.mrid)
 
-        for head in heads:
-            if head in seen:
-                continue
-            self.parent[head] = None
-            self.root[head] = head
-            seen.add(head)
-            queue = deque([head])
-            while queue:
-                current = queue.popleft()
-                for neighbor in sorted(network.neighbors(current)):
-                    if neighbor in seen:
-                        continue
-                    seen.add(neighbor)
-                    self.parent[neighbor] = current
-                    self.root[neighbor] = head
-                    self.children.setdefault(current, set()).add(neighbor)
-                    queue.append(neighbor)
+        loops: set[tuple[str, str]] = set()
+        for feeder in sorted(network.feeders, key=lambda f: f.mrid):
+            own = members.get(feeder.mrid, set())
+            if feeder.head and feeder.head in own:
+                self._build_feeder(network, feeder.head, own, loops)
 
-            self._energize(network, head)
+        self.loop_edges = sorted(loops)
 
-    def _energize(self, network: Network, head: str) -> None:
-        """Walk the tree from the head, stopping at each open switch.
+        for feeder_mrid, own in members.items():
+            feeder = network.objects.get(feeder_mrid)
+            head = getattr(feeder, "head", None)
+            if head and head in own:
+                self.unreachable |= {m for m in own if m not in self.parent}
 
-        The open device itself is still energised -- it has source-side
+        self._energize(network)
+
+    def _build_feeder(
+        self, network: Network, head: str, members: set[str], loops: set[tuple[str, str]]
+    ) -> None:
+        self.parent[head] = None
+        self.root[head] = head
+        seen = {head}
+        queue = deque([head])
+
+        while queue:
+            current = queue.popleft()
+            for neighbor in sorted(network.neighbors(current)):
+                if neighbor == current:
+                    continue  # a self-connection; validation reports it on its own
+                if neighbor not in members:
+                    continue  # another feeder's equipment, across a tie
+                if neighbor in seen:
+                    if self.parent.get(current) != neighbor:
+                        loops.add((min(current, neighbor), max(current, neighbor)))
+                    continue
+                seen.add(neighbor)
+                self.parent[neighbor] = current
+                self.root[neighbor] = head
+                self.children.setdefault(current, set()).add(neighbor)
+                queue.append(neighbor)
+
+    def _energize(self, network: Network) -> None:
+        """Flood from every feeder head over the real graph, stopping at open switches.
+
+        An open device is itself still energised -- it has source-side
         potential -- but nothing beyond it is.
         """
-        queue = deque([head])
+        queue = deque(
+            feeder.head
+            for feeder in sorted(network.feeders, key=lambda f: f.mrid)
+            if feeder.head and feeder.head in network.objects
+        )
         while queue:
             current = queue.popleft()
             if current in self._energized:
@@ -237,7 +283,7 @@ class _Topology:
             obj = network.objects.get(current)
             if isinstance(obj, Switch) and obj.is_open:
                 continue
-            queue.extend(sorted(self.children.get(current, ())))
+            queue.extend(sorted(network.neighbors(current)))
 
     def descendants(self, mrid: str) -> set[str]:
         found: set[str] = set()
