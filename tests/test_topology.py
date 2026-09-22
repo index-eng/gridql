@@ -1,7 +1,10 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from gridql import Network, build_sample_network
+from gridql import Network, build_sample_network, execute, load_network, save_network
 from gridql.errors import GridQLNameError
+from gridql.model import Switch
 
 
 def mrids(objects):
@@ -73,6 +76,84 @@ class SampleTopologyTests(unittest.TestCase):
         with self.assertRaises(GridQLNameError) as raised:
             self.network.get("REC-002")
         self.assertIn("REC-001", str(raised.exception))
+
+
+class CacheInvalidationTests(unittest.TestCase):
+    """The derived topology must never outlive the state it was derived from.
+
+    Adding equipment and making connections go through Network, which sees
+    them. Operating a switch and moving a feeder head are plain attribute
+    assignments, which it cannot see unless the object says so.
+    """
+
+    def setUp(self):
+        self.network = build_sample_network()
+
+    def dark(self):
+        return execute(self.network, "FIND devices WHERE NOT energized").mrids
+
+    def test_opening_a_switch_de_energises_what_is_below_it(self):
+        self.assertEqual(self.dark(), ["LOAD-002", "XFMR-002"])
+        self.network.get("SW-001").state = "OPEN"
+        self.assertEqual(self.dark(), ["LN-002", "LOAD-002", "TIE-001", "XFMR-002"])
+
+    def test_closing_a_switch_restores_it(self):
+        self.dark()  # warm the cache first
+        self.network.get("SW-002").state = "CLOSED"
+        self.assertEqual(self.dark(), [])
+
+    def test_a_switch_can_be_operated_repeatedly(self):
+        switch = self.network.get("SW-001")
+        for _ in range(3):
+            switch.state = "OPEN"
+            self.assertIn("TIE-001", self.dark())
+            switch.state = "CLOSED"
+            self.assertNotIn("TIE-001", self.dark())
+
+    def test_moving_the_feeder_head_moves_the_root(self):
+        feeder = self.network.feeders[0]
+        self.assertNotIn("BRK-001", mrids(self.network.downstream_of("REC-001")))
+        feeder.head = "REC-001"
+        self.assertIn("BRK-001", mrids(self.network.downstream_of("REC-001")))
+
+    def test_the_cache_is_still_a_cache(self):
+        self.assertIs(self.network.topology(), self.network.topology())
+
+    def test_a_change_replaces_the_cached_topology(self):
+        before = self.network.topology()
+        self.network.get("TIE-001").state = "CLOSED"
+        self.assertIsNot(self.network.topology(), before)
+
+    def test_normal_state_does_not_disturb_the_cache(self):
+        # Only the present state feeds energisation; normal_state is reference data.
+        before = self.network.topology()
+        self.network.get("SW-001").normal_state = "OPEN"
+        self.assertIs(self.network.topology(), before)
+
+    def test_invalidate_is_available_for_changes_nothing_can_observe(self):
+        before = self.network.topology()
+        self.network.invalidate()
+        self.assertIsNot(self.network.topology(), before)
+
+    def test_a_switch_outside_any_network_can_still_be_set(self):
+        loose = Switch(mrid="SW-LOOSE")
+        loose.state = "OPEN"  # must not raise: it belongs to no network
+        self.assertEqual(loose.state, "OPEN")
+
+    def test_a_network_read_back_from_storage_invalidates_too(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "grid.sqlite"
+            save_network(self.network, path)
+            loaded = load_network(path)
+            self.assertEqual(
+                execute(loaded, "FIND devices WHERE NOT energized").mrids,
+                ["LOAD-002", "XFMR-002"],
+            )
+            loaded.get("SW-001").state = "OPEN"
+            self.assertEqual(
+                execute(loaded, "FIND devices WHERE NOT energized").mrids,
+                ["LN-002", "LOAD-002", "TIE-001", "XFMR-002"],
+            )
 
 
 class BuilderTests(unittest.TestCase):

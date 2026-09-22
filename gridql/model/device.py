@@ -58,6 +58,10 @@ class GridObject:
     CIM_CLASS = "IdentifiedObject"
     COLUMNS: tuple[str, ...] = ("mrid", "name", "type")
 
+    #: Set by Network.add(). Not a dataclass field, so it stays out of the
+    #: queryable attribute surface and out of dataclasses.asdict().
+    _network: Any = None
+
     mrid: str
     name: str
     extras: dict[str, Any]
@@ -96,6 +100,31 @@ class GridObject:
         return f"<{type(self).__name__} {self.mrid}>"
 
 
+class Observable:
+    """Mixin for objects whose fields feed the network's cached topology.
+
+    The topology cache is rebuilt when the model changes. Adding equipment
+    and making connections go through Network, which can see them; operating
+    a switch is a plain attribute assignment, which it cannot. This makes
+    those assignments announce themselves, so a cached answer cannot survive
+    the change that invalidates it.
+
+    Only the classes that own such a field mix this in -- defining
+    ``__setattr__`` costs a little on every assignment, and most equipment
+    has nothing the topology depends on.
+    """
+
+    #: Fields whose value the derived topology is computed from.
+    TOPOLOGY_FIELDS: frozenset[str] = frozenset()
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        if name in self.TOPOLOGY_FIELDS:
+            network = self._network
+            if network is not None:
+                network.invalidate()
+
+
 @dataclass(repr=False)
 class Device(GridObject):
     """Base conducting equipment."""
@@ -120,11 +149,13 @@ class Device(GridObject):
 
 
 @dataclass(repr=False)
-class Switch(Device):
+class Switch(Observable, Device):
     """A load-break switch, and the base for every switching device."""
 
     TYPE = "switch"
     CIM_CLASS = "Switch"
+    # Opening or closing a switch changes what is energised downstream.
+    TOPOLOGY_FIELDS = frozenset({"state"})
     COLUMNS = ("mrid", "name", "type", "feeder", "phases", "voltage", "state", "normal_state")
 
     normal_state: str = CLOSED

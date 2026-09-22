@@ -29,6 +29,10 @@ class Network:
         self.objects: dict[str, GridObject] = {}
         self._adjacency: dict[str, set[str]] = {}
         self._topology: _Topology | None = None
+        # Bumped by every change the topology is derived from. The cache
+        # records the revision it was built at and rebuilds when they differ.
+        self._revision = 0
+        self._topology_revision = -1
 
     # -- construction ---------------------------------------------------
 
@@ -37,7 +41,9 @@ class Network:
             raise ValueError(f"duplicate mRID '{obj.mrid}'")
         self.objects[obj.mrid] = obj
         self._adjacency.setdefault(obj.mrid, set())
-        self._invalidate()
+        # So the object can report changes the network could not otherwise see.
+        obj._network = self
+        self.invalidate()
         return obj
 
     def add_substation(self, mrid: str, **kwargs) -> Substation:
@@ -46,7 +52,6 @@ class Network:
     def add_feeder(self, mrid: str, **kwargs) -> Feeder:
         feeder = Feeder(mrid=mrid, **kwargs)
         self.add(feeder)
-        feeder.network = self
         if feeder.substation is not None and feeder.voltage is None:
             substation = self.objects.get(feeder.substation)
             if isinstance(substation, Substation):
@@ -62,10 +67,17 @@ class Network:
                 raise GridQLNameError(f"cannot connect unknown device '{mrid}'")
         self._adjacency[a_mrid].add(b_mrid)
         self._adjacency[b_mrid].add(a_mrid)
-        self._invalidate()
+        self.invalidate()
 
-    def _invalidate(self) -> None:
-        self._topology = None
+    def invalidate(self) -> None:
+        """Record that the derived topology is out of date.
+
+        Called for you whenever the model changes in a way the network can
+        observe: equipment added, a connection made, a switch operated, a
+        feeder head reassigned. Call it yourself only if you reach past all
+        of those to mutate the model some other way.
+        """
+        self._revision += 1
 
     # -- lookup ---------------------------------------------------------
 
@@ -123,8 +135,10 @@ class Network:
     # -- topology -------------------------------------------------------
 
     def topology(self) -> "_Topology":
-        if self._topology is None:
+        """The derived topology, rebuilt only when the model has changed."""
+        if self._topology is None or self._topology_revision != self._revision:
             self._topology = _Topology(self)
+            self._topology_revision = self._revision
         return self._topology
 
     def downstream_of(self, identifier: str) -> list[GridObject]:

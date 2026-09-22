@@ -92,6 +92,11 @@ attribute:
 FIND devices DOWNSTREAM OF "REC-001" WHERE NOT energized
 ```
 
+Operating a switch updates that immediately — `network.get("SW-001").state = "OPEN"` and the next
+query sees the new answer. The derived topology is cached, but the cache is keyed to the state it
+was built from, so it cannot outlive a change. If you mutate the model in some way the network
+cannot observe, call `network.invalidate()`.
+
 Several relations may be stacked, and they intersect.
 
 ### Conditions

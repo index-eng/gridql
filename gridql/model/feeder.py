@@ -26,6 +26,7 @@ from .device import (
     GridObject,
     LineSegment,
     Load,
+    Observable,
     Recloser,
     Sectionalizer,
     Switch,
@@ -55,10 +56,12 @@ class Substation(GridObject):
 
 
 @dataclass(repr=False)
-class Feeder(GridObject):
+class Feeder(Observable, GridObject):
     TYPE = "feeder"
     CIM_CLASS = "Feeder"
     COLUMNS = ("mrid", "name", "type", "substation", "voltage")
+    # The head is the root every traversal starts from.
+    TOPOLOGY_FIELDS = frozenset({"head"})
 
     mrid: str
     name: str = ""
@@ -73,9 +76,13 @@ class Feeder(GridObject):
             self.voltage = parse_quantity(self.voltage, "kV")
         # Runtime wiring, deliberately not dataclass fields so it stays out of
         # the queryable attribute surface.
-        self.network: Any = None
         self.head: str | None = None
         self.last: str | None = None
+
+    @property
+    def network(self) -> Any:
+        """The network this feeder belongs to, set by ``Network.add()``."""
+        return self._network
 
     # -- builder API ----------------------------------------------------
 
