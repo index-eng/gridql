@@ -111,7 +111,35 @@ query sees the new answer. The derived topology is cached, but the cache is keye
 was built from, so it cannot outlive a change. If you mutate the model in some way the network
 cannot observe, call `network.invalidate()`.
 
-Several relations may be stacked, and they intersect.
+Several relations may be stacked, and they intersect. The first one also decides two things
+below: the order results come back in, and what `hops` measures.
+
+**Results come back in walking order** — nearest the target first, then outward — because that is
+the order the question implies. `UPSTREAM OF "XFMR-002"` reports the switch above it, then the
+recloser above that, and so on to the feeder head. Add `ORDER BY` to override it; without a
+topology relation, results stay sorted by mRID.
+
+That makes the fault-isolation question a query:
+
+```
+FIND reclosers UPSTREAM OF "XFMR-002" LIMIT 1     -- which device operates for a fault here
+```
+
+### Distance: hops and depth
+
+`hops` is how far a device is from the query's topology target, and `depth` is how far it is from
+its feeder head. Both are ordinary attributes, so they can be selected, filtered, sorted and
+aggregated:
+
+```
+FIND devices DOWNSTREAM OF "REC-001" SELECT mRID, type, hops
+FIND devices DOWNSTREAM OF "REC-001" WHERE hops <= 1
+FIND devices DOWNSTREAM OF "REC-001" SELECT MAX(hops), COUNT(*)
+FIND devices WHERE depth = 0                       -- the feeder heads
+```
+
+`depth` needs nothing else. `hops` only means something relative to a target, so a query that
+mentions it without a topology relation is refused rather than answered with blanks.
 
 ### Conditions
 

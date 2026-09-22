@@ -29,10 +29,19 @@ class MilestoneQueryTests(unittest.TestCase):
         self.assertEqual(self.query("FIND reclosers"), ["REC-001"])
 
     def test_3_find_devices_downstream_of_the_recloser(self):
+        found = self.query('FIND devices DOWNSTREAM OF "REC-001"')
+
+        # Everything below the recloser, and nothing else.
         self.assertEqual(
-            self.query('FIND devices DOWNSTREAM OF "REC-001"'),
+            sorted(found),
             ["LN-002", "LOAD-001", "LOAD-002", "SW-001", "SW-002", "TIE-001",
              "XFMR-001", "XFMR-002"],
+        )
+        # Reported in walking order: nearest to the recloser first.
+        self.assertEqual(
+            found,
+            ["SW-001", "SW-002", "XFMR-001", "LN-002", "LOAD-001", "XFMR-002",
+             "LOAD-002", "TIE-001"],
         )
 
     def test_4_find_transformers_by_rating(self):

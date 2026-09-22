@@ -37,6 +37,48 @@ from .ast import (
 )
 from .parser import parse, parse_script
 
+#: Attribute names whose value depends on the query, not on the object.
+HOPS = "hops"
+
+
+def _value(network: Network, obj: GridObject, name: str, distances) -> Any:
+    """An attribute's value, including the ones only this query can answer.
+
+    ``hops`` is how far the object is from the query's topology target, so
+    it exists only while a query is being evaluated -- unlike ``depth``,
+    which the network knows on its own.
+    """
+    if name.lower() == HOPS:
+        if distances is None:
+            return MISSING
+        found = distances.get(obj.mrid)
+        return MISSING if found is None else found
+    return network.attribute(obj, name)
+
+
+def _referenced(node: Node | None) -> set[str]:
+    """Every attribute a WHERE clause mentions, on either side."""
+    found: set[str] = set()
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (Compare, In, Contains, Truthy)):
+            found.add(current.attribute.lower())
+        if isinstance(current, (And, Or)):
+            stack.extend((current.left, current.right))
+        elif isinstance(current, Not):
+            stack.append(current.operand)
+        elif isinstance(current, Compare):
+            stack.append(current.operand)
+        elif isinstance(current, Contains):
+            stack.append(current.operand)
+        elif isinstance(current, In):
+            stack.extend(current.operands)
+        elif isinstance(current, Name):
+            found.add(current.name.lower())
+    return found
+
+
 #: Strings that read as false when an attribute is used as a bare test.
 _FALSEY_WORDS = frozenset({"", "false", "no", "n", "0", "off"})
 
@@ -54,6 +96,8 @@ class Result:
     select: tuple[SelectItem, ...] | None = None
     #: Rows an aggregate query computed. None for a plain equipment query.
     computed: list[dict[str, Any]] | None = None
+    #: Distance from the query's topology target, by mRID.
+    distances: dict[str, int] | None = field(default=None, repr=False, compare=False)
 
     @property
     def is_aggregate(self) -> bool:
@@ -110,7 +154,7 @@ class Result:
                 value = (
                     obj.attribute(column)
                     if self.network is None
-                    else self.network.attribute(obj, column)
+                    else _value(self.network, obj, column, self.distances)
                 )
                 value_of[column] = None if value is MISSING else value
             rows.append(value_of)
@@ -136,34 +180,81 @@ def evaluate(network: Network, query: Query) -> Result:
     objects = network.of_class(class_for(type_key))
 
     # Topology constraints intersect: each one narrows what came before.
-    for relation in query.relations:
-        related = {obj.mrid for obj in getattr(network, relation.method)(relation.target)}
-        objects = [obj for obj in objects if obj.mrid in related]
+    # The first one also fixes what "hops" means and the natural order.
+    distances: dict[str, int] | None = None
+    for index, relation in enumerate(query.relations):
+        related = getattr(network, relation.method)(relation.target)
+        if index == 0:
+            distances = _distances(network, relation, related)
+        allowed = {obj.mrid for obj in related}
+        objects = [obj for obj in objects if obj.mrid in allowed]
+
+    select = _projection(query, type_key, distances)
 
     if query.where is not None:
-        context = _Context(network, attribute_universe(type_key))
+        context = _Context(network, attribute_universe(type_key), distances)
         objects = [obj for obj in objects if _test(query.where, obj, context)]
 
-    select = _projection(query, type_key)
-
     if query.is_aggregate:
-        rows = _aggregate(network, query, objects, select)
-        return Result(query, query.type_name, type_key, objects, network, select, rows)
+        rows = _aggregate(network, query, objects, select, distances)
+        return Result(
+            query, query.type_name, type_key, objects, network, select, rows, distances
+        )
 
-    _order_objects(network, query, objects)
+    _order_objects(network, query, objects, distances)
     if query.limit is not None:
         objects = objects[: query.limit]
 
-    return Result(query, query.type_name, type_key, objects, network, select)
+    return Result(
+        query, query.type_name, type_key, objects, network, select, None, distances
+    )
+
+
+def _distances(network: Network, relation, related: list[GridObject]) -> dict[str, int]:
+    """How far each related object is from the relation's target.
+
+    Every tree relation can be answered from one depth map: the target and
+    the object both sit somewhere on the feeder, and the gap between them is
+    the number of devices in between.
+    """
+    if relation.kind == "CONNECTED TO":
+        return {obj.mrid: 1 for obj in related}
+
+    target = network.get(relation.target)
+    origin = network.depth_of(target.mrid)
+
+    distances: dict[str, int] = {}
+    for obj in related:
+        depth = network.depth_of(obj.mrid)
+        if depth is MISSING:
+            continue
+        # A feeder or substation target has no depth of its own, so distance
+        # is measured from that container's head.
+        distances[obj.mrid] = depth if origin is MISSING else abs(depth - origin)
+    return distances
 
 
 # -- projection ---------------------------------------------------------
 
 
-def _projection(query: Query, type_key: str) -> tuple[SelectItem, ...] | None:
+def _projection(
+    query: Query, type_key: str, distances: dict[str, int] | None = None
+) -> tuple[SelectItem, ...] | None:
     """The effective SELECT list, with GROUP BY's default filled in and checked."""
     select = query.select
     known = attribute_universe(type_key)
+
+    referenced = (
+        {item.attribute.lower() for item in select or ()}
+        | {column.lower() for column in query.group_by or ()}
+        | {key.item.attribute.lower() for key in query.order_by or ()}
+        | _referenced(query.where)
+    )
+    if HOPS in referenced and distances is None:
+        raise GridQLError(
+            "hops is the distance from a topology target, so the query needs "
+            "DOWNSTREAM OF, UPSTREAM OF, CONNECTED TO or FED BY"
+        )
 
     if select is None and query.group_by is not None:
         # "FIND devices GROUP BY feeder" means: one row per feeder, and count them.
@@ -222,6 +313,7 @@ def _aggregate(
     query: Query,
     objects: list[GridObject],
     select: tuple[SelectItem, ...] | None,
+    distances: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Fold the matched equipment into one row per group."""
     select = select or ()
@@ -230,7 +322,7 @@ def _aggregate(
     if group_by:
         groups: dict[tuple, list[GridObject]] = {}
         for obj in objects:
-            key = tuple(_plain(network.attribute(obj, column)) for column in group_by)
+            key = tuple(_plain(_value(network, obj, column, distances)) for column in group_by)
             groups.setdefault(key, []).append(obj)
         ordered = sorted(groups.items(), key=lambda pair: _sort_key(pair[0]))
     else:
@@ -247,7 +339,7 @@ def _aggregate(
             if item.written in values:
                 continue
             values[item.written] = (
-                _apply(item, network, members)
+                _apply(item, network, members, distances)
                 if item.is_aggregate
                 else keyed.get(item.attribute.lower())
             )
@@ -259,7 +351,12 @@ def _aggregate(
     return rows if query.limit is None else rows[: query.limit]
 
 
-def _apply(item: SelectItem, network: Network, members: list[GridObject]) -> Any:
+def _apply(
+    item: SelectItem,
+    network: Network,
+    members: list[GridObject],
+    distances: dict[str, int] | None = None,
+) -> Any:
     function = item.function
 
     if function == "count" and item.attribute == "*":
@@ -267,7 +364,7 @@ def _apply(item: SelectItem, network: Network, members: list[GridObject]) -> Any
 
     values = [
         value
-        for value in (network.attribute(obj, item.attribute) for obj in members)
+        for value in (_value(network, obj, item.attribute, distances) for obj in members)
         if value is not MISSING and value is not None
     ]
 
@@ -296,12 +393,24 @@ def _apply(item: SelectItem, network: Network, members: list[GridObject]) -> Any
 # -- ordering -----------------------------------------------------------
 
 
-def _order_objects(network: Network, query: Query, objects: list[GridObject]) -> None:
+def _order_objects(
+    network: Network,
+    query: Query,
+    objects: list[GridObject],
+    distances: dict[str, int] | None = None,
+) -> None:
     objects.sort(key=lambda obj: obj.mrid)  # a stable, meaningful tie-break
+
+    if not query.order_by and distances is not None:
+        # A topology query walked the circuit to find these, so report them
+        # in that order: nearest to the target first.
+        objects.sort(key=lambda obj: distances.get(obj.mrid, len(distances) + 1))
+        return
+
     for key in reversed(query.order_by or ()):
         _sort_in_place(
             objects,
-            lambda obj, k=key: network.attribute(obj, k.item.attribute),
+            lambda obj, k=key: _value(network, obj, k.item.attribute, distances),
             key.descending,
         )
 
@@ -349,6 +458,10 @@ def _plain(value: Any) -> Any:
 class _Context:
     network: Network
     attributes: frozenset[str]
+    distances: dict[str, int] | None = None
+
+    def value(self, obj: GridObject, name: str) -> Any:
+        return _value(self.network, obj, name, self.distances)
 
 
 def _test(node: Node, obj: GridObject, context: _Context) -> bool:
@@ -360,10 +473,10 @@ def _test(node: Node, obj: GridObject, context: _Context) -> bool:
         return not _test(node.operand, obj, context)
 
     if isinstance(node, Truthy):
-        return _truthy(context.network.attribute(obj, node.attribute))
+        return _truthy(context.value(obj, node.attribute))
 
     if isinstance(node, Compare):
-        left = context.network.attribute(obj, node.attribute)
+        left = context.value(obj, node.attribute)
         if left is MISSING:
             return False
         right = _operand(node.operand, obj, context, node.attribute)
@@ -372,7 +485,7 @@ def _test(node: Node, obj: GridObject, context: _Context) -> bool:
         return _compare(left, node.operator, right)
 
     if isinstance(node, In):
-        left = context.network.attribute(obj, node.attribute)
+        left = context.value(obj, node.attribute)
         if left is MISSING:
             return False
         return any(
@@ -382,7 +495,7 @@ def _test(node: Node, obj: GridObject, context: _Context) -> bool:
         )
 
     if isinstance(node, Contains):
-        left = context.network.attribute(obj, node.attribute)
+        left = context.value(obj, node.attribute)
         right = _operand(node.operand, obj, context, node.attribute)
         if left is MISSING or right is MISSING:
             return False
@@ -413,7 +526,7 @@ def _operand(node: Node, obj: GridObject, context: _Context, attribute: str) -> 
 
     if isinstance(node, Name):
         if node.name.lower() in context.attributes:
-            return context.network.attribute(obj, node.name)
+            return context.value(obj, node.name)
         return node.name
 
     raise TypeError(f"cannot resolve operand {node!r}")

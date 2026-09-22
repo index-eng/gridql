@@ -176,6 +176,23 @@ equipment and stops at a tie, so one circuit never swallows its neighbour. Energ
 feeder boundaries and follows the real graph from every source, so closing a tie back-feeds the
 next circuit — which is exactly what you want to ask before you close it.
 
+### How far away is it?
+
+Topology results come back in walking order — nearest the target first — so the everyday
+fault-isolation question is just a query:
+
+```bash
+gridql 'FIND reclosers UPSTREAM OF "XFMR-002" LIMIT 1'   # which device operates for a fault here
+```
+
+`hops` (distance from the query's target) and `depth` (distance from the feeder head) are ordinary
+attributes you can select, filter, sort and total:
+
+```
+FIND devices DOWNSTREAM OF "REC-001" SELECT mRID, type, hops
+FIND devices DOWNSTREAM OF "REC-001" WHERE hops <= 1
+```
+
 ### Filters that read like the question
 
 ```

@@ -68,7 +68,7 @@ class RoundTripTests(StorageTestCase):
         self.assertEqual(execute(loaded, "FIND feeders").mrids, ["FDR-104"])
         self.assertEqual(execute(loaded, "FIND reclosers").mrids, ["REC-001"])
         self.assertEqual(
-            execute(loaded, 'FIND devices DOWNSTREAM OF "REC-001"').mrids,
+            sorted(execute(loaded, 'FIND devices DOWNSTREAM OF "REC-001"').mrids),
             ["LN-002", "LOAD-001", "LOAD-002", "SW-001", "SW-002", "TIE-001",
              "XFMR-001", "XFMR-002"],
         )

@@ -131,9 +131,16 @@ class Network:
 
     def attribute(self, obj: GridObject, name: str) -> Any:
         """Attribute access for the evaluator, including network-derived ones."""
-        if name.lower() == "energized":
+        key = name.lower()
+        if key == "energized":
             return self.is_energized(obj.mrid)
+        if key == "depth":
+            return self.depth_of(obj.mrid)
         return obj.attribute(name)
+
+    def depth_of(self, mrid: str) -> Any:
+        """How many devices lie between this one and its feeder head."""
+        return self.topology().depth.get(mrid, MISSING)
 
     # -- topology -------------------------------------------------------
 
@@ -172,7 +179,7 @@ class Network:
         target = self.get(identifier)
         if isinstance(target, (Feeder, Substation)):
             return self.downstream_of(identifier)
-        return self._resolve(self.topology().descendants(target.mrid) | {target.mrid})
+        return self._resolve([target.mrid, *self.topology().descendants(target.mrid)])
 
     def is_energized(self, mrid: str) -> Any:
         obj = self.objects.get(mrid)
@@ -211,6 +218,8 @@ class _Topology:
         self.parent: dict[str, str | None] = {}
         self.children: dict[str, set[str]] = {}
         self.root: dict[str, str] = {}
+        #: Edges between a device and its feeder head. The head is at 0.
+        self.depth: dict[str, int] = {}
         #: Edges that close a loop inside a feeder. A distribution feeder is
         #: meant to be radial, so these are reported by validation: the tree
         #: had to pick one path and the choice is arbitrary.
@@ -247,6 +256,7 @@ class _Topology:
     ) -> None:
         self.parent[head] = None
         self.root[head] = head
+        self.depth[head] = 0
         seen = {head}
         queue = deque([head])
 
@@ -264,6 +274,7 @@ class _Topology:
                 seen.add(neighbor)
                 self.parent[neighbor] = current
                 self.root[neighbor] = head
+                self.depth[neighbor] = self.depth[current] + 1
                 self.children.setdefault(current, set()).add(neighbor)
                 queue.append(neighbor)
 
@@ -288,15 +299,27 @@ class _Topology:
                 continue
             queue.extend(sorted(network.neighbors(current)))
 
-    def descendants(self, mrid: str) -> set[str]:
-        found: set[str] = set()
-        queue = deque(self.children.get(mrid, ()))
+    def descendants(self, mrid: str) -> list[str]:
+        """Everything below ``mrid``, nearest first.
+
+        Breadth-first and alphabetical within a level, so the walking order
+        is both meaningful and reproducible.
+        """
+        found: list[str] = []
+        seen: set[str] = set()
+        queue = deque(sorted(self.children.get(mrid, ())))
         while queue:
             current = queue.popleft()
-            if current in found:
+            if current in seen:
                 continue
-            found.add(current)
-            queue.extend(self.children.get(current, ()))
+            seen.add(current)
+            found.append(current)
+            queue.extend(sorted(self.children.get(current, ())))
+
+        # A plain breadth-first walk groups a level by parent. Sorting on
+        # (depth, mRID) puts the whole level together in a predictable order,
+        # and makes this agree with how the language reports the same query.
+        found.sort(key=lambda candidate: (self.depth.get(candidate, 0), candidate))
         return found
 
     def ancestors(self, mrid: str) -> list[str]:

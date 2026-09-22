@@ -41,7 +41,9 @@ class _Missing:
 MISSING = _Missing()
 
 #: Attributes every grid object answers to, regardless of its dataclass fields.
-DERIVED_ATTRS = frozenset({"mrid", "id", "name", "type", "cim_class", "energized"})
+DERIVED_ATTRS = frozenset(
+    {"mrid", "id", "name", "type", "cim_class", "energized", "depth", "hops"}
+)
 
 
 @lru_cache(maxsize=None)

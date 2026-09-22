@@ -145,9 +145,10 @@ class QueryTests(unittest.TestCase):
         )
 
     def test_de_energised_work_area(self):
+        # Nearest the recloser first: the transformer, then the load beyond it.
         self.assertEqual(
             self.run_query('FIND devices DOWNSTREAM OF "REC-001" WHERE NOT energized'),
-            ["LOAD-002", "XFMR-002"],
+            ["XFMR-002", "LOAD-002"],
         )
 
 
