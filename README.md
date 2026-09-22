@@ -25,6 +25,7 @@ python3 -m gridql.cli                                  # REPL against the sample
 python3 -m gridql.cli 'FIND reclosers'                 # one-shot query
 python3 -m gridql.cli --format json 'FIND loads'       # table (default), json or csv
 python3 -m gridql.cli --explain 'FIND devices DOWNSTREAM OF "REC-001"'
+python3 -m gridql.cli run queries/feeder_analysis.gridql   # run a saved query
 python3 -m unittest discover -s tests                  # the test suite
 ```
 
@@ -49,7 +50,11 @@ print(render(result, 'json'))
 FIND <type>
   [ DOWNSTREAM OF <device> | UPSTREAM OF <device> | CONNECTED TO <device> | FED BY <feeder> ]*
   [ WHERE <condition> ]
+  [ SELECT <column>, ... ]
+  [ RETURN table | json | csv ]
 ```
+
+Clauses come in that order. Statements are separated by `;`.
 
 Keywords are case-insensitive. `--` and `#` start a comment.
 
@@ -101,6 +106,25 @@ FIND switches WHERE state = "OPEN"            -- quoting always forces the value
 
 String comparisons are case-insensitive.
 
+### SELECT
+
+By default a query returns the columns that suit the type. `SELECT` picks them instead, in the
+order given, and column headers keep the spelling you wrote — so `SELECT mRID` produces an `mRID`
+header even though attribute lookup is case-insensitive. `SELECT *` is the default set.
+
+```
+FIND transformers SELECT name, mRID, kva, primary_voltage, secondary_voltage
+```
+
+A selected attribute the object does not have comes back empty rather than being dropped, so
+`FIND devices SELECT mrid, kva` lists every device with ratings only where they exist. Selecting
+something no such type could have — `SELECT kvaa` — is an error, with a suggestion.
+
+### RETURN
+
+`RETURN table|json|csv` records the output format in the query itself, so a saved query renders
+the way its author intended. An explicit `--format` on the command line overrides it.
+
 ### Units
 
 Numbers may carry a unit and are converted to the attribute's own unit; a bare number is assumed to
@@ -114,6 +138,49 @@ FIND transformers WHERE kva >= 0.5MVA
 
 Dimensions are enforced, so `kva >= 500kW` is an error rather than a wrong answer. Canonical units:
 voltages in kV, transformer ratings in kVA, load in kW/kVAr, ampacity in A, length in ft.
+
+## .gridql files
+
+A query worth writing twice is worth keeping. A `.gridql` file holds one or more statements,
+separated by `;`, with `--` or `#` comments:
+
+```sql
+-- Large service transformers on the Oakdale circuit.
+FIND transformers
+DOWNSTREAM OF "FDR-104"
+WHERE kva >= 500
+SELECT
+    name,
+    mRID,
+    kva,
+    primary_voltage,
+    secondary_voltage
+RETURN table
+```
+
+```bash
+gridql run queries/feeder_analysis.gridql
+gridql run queries/feeder_summary.gridql --format json
+gridql run queries/feeder_analysis.gridql --explain
+```
+
+These are artifacts an engineer can version-control, review, share and run in CI against different
+datasets — not disposable database queries. Four examples live in [`queries/`](queries/).
+
+**Output.** Each statement renders in its own format: its `RETURN` clause, else `--format`, else a
+table. When a file has several statements, each result is preceded by a `-- n. <query>` comment so
+the output stays readable. The exception is `--format json`, which emits a *single* JSON document —
+an array with one `{query, type, rows}` entry per statement — so a CI job can parse the whole run
+at once.
+
+From Python:
+
+```python
+from gridql import build_sample_network, run_file
+
+for result in run_file(build_sample_network(), "queries/feeder_summary.gridql"):
+    print(result.type_name, result.mrids)
+```
 
 ## Building a network
 
@@ -161,3 +228,9 @@ Every class records the CIM class it maps to (`reclosers` → `ProtectedSwitch`,
 SQLite persistence, CIM import/export, GeoJSON output, CSV/JSON input loaders, and the editor —
 steps 4 through 6 of the design in `idea.md`. The loader seam and the CIM class annotations are in
 place so none of them require reworking the language.
+
+From the `.gridql` section of the design, still to come: parameterized queries
+(`gridql run export_feeder.gridql --feeder FDR-104`, planned as a `PARAM feeder = "FDR-104"`
+declaration with `$feeder` references), the `EXPORT CIM ... FROM ... INCLUDING ...` statement, and
+`project.gridqlconfig`. `gridql run` currently loads the bundled sample network, since there is no
+project config yet to point it at a real dataset.

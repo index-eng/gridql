@@ -12,9 +12,10 @@ import io
 import json
 from typing import Any, Iterable
 
+from .lang.ast import OUTPUT_FORMATS
 from .lang.evaluator import Result
 
-FORMATS = ("table", "json", "csv")
+FORMATS = OUTPUT_FORMATS
 
 
 def columns_for(rows: Iterable[dict[str, Any]]) -> list[str]:
@@ -87,3 +88,41 @@ def render(result: Result, output_format: str = "table") -> str:
         raise ValueError(
             f"unknown format '{output_format}'; expected one of {', '.join(FORMATS)}"
         ) from None
+
+
+def summarize(result: Result) -> str:
+    """The statement on one line, for a header above its output."""
+    return " ".join(result.query.describe().split())
+
+
+def render_script(results: list[Result], output_format: str | None = None) -> str:
+    """Render every statement of a script run.
+
+    Two modes, because a script serves two audiences:
+
+    * ``--format json`` produces one JSON document -- an array with an entry
+      per statement -- so a CI job can parse the whole run at once;
+    * otherwise each statement is rendered in its own format (its ``RETURN``
+      clause, else the given format, else a table) and the chunks are
+      separated by a comment naming the statement.
+    """
+    if not results:
+        return ""
+
+    if output_format == "json":
+        return json.dumps(
+            [
+                {"query": summarize(result), "type": result.type_name, "rows": result.rows()}
+                for result in results
+            ],
+            indent=2,
+            default=str,
+        )
+
+    chunks: list[str] = []
+    for number, result in enumerate(results, start=1):
+        body = render(result, output_format or result.output_format or "table")
+        if len(results) > 1:
+            body = f"-- {number}. {summarize(result)}\n{body}"
+        chunks.append(body)
+    return "\n\n".join(chunks)

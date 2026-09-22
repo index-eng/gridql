@@ -1,0 +1,7 @@
+-- Switching devices that are not in their normal position.
+-- Ties are excluded: a normally open tie being open is not an abnormality.
+
+FIND switches
+WHERE state != normal_state
+SELECT mRID, name, feeder, normal_state, state
+RETURN table

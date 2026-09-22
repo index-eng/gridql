@@ -1,0 +1,13 @@
+-- Large service transformers on the Oakdale circuit.
+-- From the design doc's .gridql example.
+
+FIND transformers
+DOWNSTREAM OF "FDR-104"
+WHERE kva >= 500
+SELECT
+    name,
+    mRID,
+    kva,
+    primary_voltage,
+    secondary_voltage
+RETURN table

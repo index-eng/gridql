@@ -1,0 +1,6 @@
+-- Every transformer rated at or above half an MVA, system-wide.
+
+FIND transformers
+WHERE kva >= 0.5MVA
+SELECT mRID, name, feeder, kva
+RETURN table

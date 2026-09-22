@@ -8,15 +8,30 @@ point of the layering.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import difflib
+from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from ..errors import UnitError
+from ..errors import GridQLNameError, UnitError
 from ..model import MISSING, GridObject, Network
 from ..model.types import attribute_universe, canonical_unit, class_for, resolve_type
 from ..units import convert
-from .ast import And, Compare, Contains, In, Literal, Name, Node, Not, Or, Quantity, Query, Truthy
-from .parser import parse
+from .ast import (
+    And,
+    Compare,
+    Contains,
+    In,
+    Literal,
+    Name,
+    Node,
+    Not,
+    Or,
+    Quantity,
+    Query,
+    Script,
+    Truthy,
+)
+from .parser import parse, parse_script
 
 #: Strings that read as false when an attribute is used as a bare test.
 _FALSEY_WORDS = frozenset({"", "false", "no", "n", "0", "off"})
@@ -30,6 +45,12 @@ class Result:
     type_name: str
     type_key: str
     objects: list[GridObject]
+    network: Network | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def output_format(self) -> str | None:
+        """The format the query's RETURN clause asked for, if any."""
+        return self.query.return_format
 
     def __iter__(self) -> Iterator[GridObject]:
         return iter(self.objects)
@@ -42,7 +63,16 @@ class Result:
         return [obj.mrid for obj in self.objects]
 
     def columns(self) -> list[str]:
-        """Union of the display columns of the classes present, in order."""
+        """The columns to render: the SELECT list, or the classes' own.
+
+        A selected column keeps the spelling the query used, so
+        ``SELECT mRID`` produces an ``mRID`` header even though attribute
+        lookup is case-insensitive.
+        """
+        select = self.query.select
+        if select is not None and select != ("*",):
+            return list(select)
+
         columns: list[str] = []
         for obj in self.objects:
             for column in obj.COLUMNS:
@@ -62,15 +92,28 @@ class Result:
         for obj in self.objects:
             value_of = {}
             for column in columns:
-                value = obj.attribute(column)
+                value = (
+                    obj.attribute(column)
+                    if self.network is None
+                    else self.network.attribute(obj, column)
+                )
                 value_of[column] = None if value is MISSING else value
             rows.append(value_of)
         return rows
 
 
 def execute(network: Network, source: str) -> Result:
-    """Parse and run a GridQL query."""
+    """Parse and run a single GridQL query."""
     return evaluate(network, parse(source))
+
+
+def execute_script(network: Network, source: str, path: str | None = None) -> list[Result]:
+    """Parse and run every statement of a .gridql script, in order."""
+    return evaluate_script(network, parse_script(source, path))
+
+
+def evaluate_script(network: Network, script: Script) -> list[Result]:
+    return [evaluate(network, statement) for statement in script.statements]
 
 
 def evaluate(network: Network, query: Query) -> Result:
@@ -87,7 +130,23 @@ def evaluate(network: Network, query: Query) -> Result:
         objects = [obj for obj in objects if _test(query.where, obj, context)]
 
     objects.sort(key=lambda obj: obj.mrid)
-    return Result(query, query.type_name, type_key, objects)
+
+    if query.select is not None:
+        _check_columns(query.select, type_key)
+
+    return Result(query, query.type_name, type_key, objects, network)
+
+
+def _check_columns(columns: tuple[str, ...], type_key: str) -> None:
+    """Reject a SELECT naming something the type could never have."""
+    known = attribute_universe(type_key)
+    for column in columns:
+        if column == "*" or column.lower() in known:
+            continue
+        raise GridQLNameError(
+            f"'{column}' is not an attribute of {type_key}",
+            tuple(difflib.get_close_matches(column.lower(), known, n=3, cutoff=0.5)),
+        )
 
 
 @dataclass(frozen=True)

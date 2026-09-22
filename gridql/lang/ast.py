@@ -148,11 +148,17 @@ class Relation(Node):
         return f'{self.kind} "{self.target}"'
 
 
+#: Output formats a RETURN clause may name.
+OUTPUT_FORMATS = ("table", "json", "csv")
+
+
 @dataclass(frozen=True)
 class Query(Node):
     type_name: str
     relations: tuple[Relation, ...] = ()
     where: Node | None = None
+    select: tuple[str, ...] | None = None
+    return_format: str | None = None
     source: str = field(default="", compare=False)
 
     def describe(self) -> str:
@@ -160,4 +166,26 @@ class Query(Node):
         parts.extend(relation.describe() for relation in self.relations)
         if self.where is not None:
             parts.append(f"WHERE {self.where.describe()}")
+        if self.select is not None:
+            parts.append(f"SELECT {', '.join(self.select)}")
+        if self.return_format is not None:
+            parts.append(f"RETURN {self.return_format}")
         return "\n".join(parts)
+
+
+@dataclass(frozen=True)
+class Script(Node):
+    """The statements of one .gridql file, in the order they will run."""
+
+    statements: tuple[Query, ...]
+    source: str = field(default="", compare=False)
+    path: str | None = field(default=None, compare=False)
+
+    def __iter__(self):
+        return iter(self.statements)
+
+    def __len__(self) -> int:
+        return len(self.statements)
+
+    def describe(self) -> str:
+        return ";\n\n".join(statement.describe() for statement in self.statements)

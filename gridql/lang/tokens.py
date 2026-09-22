@@ -15,6 +15,8 @@ class TokenKind(Enum):
     LPAREN = "("
     RPAREN = ")"
     COMMA = ","
+    STAR = "*"
+    SEMICOLON = ";"
     EOF = "end of query"
 
 
@@ -24,6 +26,8 @@ KEYWORDS = frozenset(
     {
         "FIND",
         "WHERE",
+        "SELECT",
+        "RETURN",
         "AND",
         "OR",
         "NOT",

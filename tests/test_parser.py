@@ -1,7 +1,7 @@
 import unittest
 
 from gridql.errors import GridQLSyntaxError
-from gridql.lang import parse
+from gridql.lang import parse, parse_script
 from gridql.lang.ast import And, Compare, Contains, In, Literal, Name, Not, Or, Quantity, Truthy
 
 
@@ -74,9 +74,71 @@ class ParserTests(unittest.TestCase):
         source = 'FIND transformers DOWNSTREAM OF "REC-001" WHERE kva >= 500'
         self.assertEqual(parse(parse(source).describe()), parse(source))
 
+    def test_select_columns(self):
+        query = parse("FIND transformers SELECT name, mRID, kva")
+        self.assertEqual(query.select, ("name", "mRID", "kva"))
+
+    def test_select_star(self):
+        self.assertEqual(parse("FIND devices SELECT *").select, ("*",))
+
+    def test_no_select_is_none(self):
+        self.assertIsNone(parse("FIND devices").select)
+
+    def test_return_format(self):
+        self.assertEqual(parse("FIND devices RETURN json").return_format, "json")
+        self.assertEqual(parse("FIND devices RETURN CSV").return_format, "csv")
+        self.assertIsNone(parse("FIND devices").return_format)
+
+    def test_unknown_return_format(self):
+        with self.assertRaises(GridQLSyntaxError) as raised:
+            parse("FIND devices RETURN xml")
+        self.assertIn("table, json, csv", str(raised.exception))
+
+    def test_full_clause_order(self):
+        query = parse(
+            'FIND transformers DOWNSTREAM OF "FDR-104" WHERE kva >= 500 '
+            "SELECT name, kva RETURN csv"
+        )
+        self.assertEqual(query.type_name, "transformers")
+        self.assertEqual(len(query.relations), 1)
+        self.assertIsNotNone(query.where)
+        self.assertEqual(query.select, ("name", "kva"))
+        self.assertEqual(query.return_format, "csv")
+
+    def test_clauses_out_of_order_say_so(self):
+        with self.assertRaises(GridQLSyntaxError) as raised:
+            parse("FIND devices SELECT name WHERE kva >= 500")
+        self.assertIn("must come earlier", str(raised.exception))
+
+    def test_describe_round_trips_select_and_return(self):
+        source = "FIND transformers WHERE kva >= 500 SELECT name, kva RETURN json"
+        self.assertEqual(parse(parse(source).describe()), parse(source))
+
+    def test_script_splits_on_semicolons(self):
+        script = parse_script("FIND feeders; FIND reclosers;")
+        self.assertEqual([s.type_name for s in script], ["feeders", "reclosers"])
+
+    def test_trailing_and_repeated_semicolons_are_tolerated(self):
+        self.assertEqual(len(parse_script("FIND feeders ;; FIND reclosers ;")), 2)
+
+    def test_parse_rejects_a_multi_statement_source(self):
+        with self.assertRaises(GridQLSyntaxError) as raised:
+            parse("FIND feeders; FIND reclosers")
+        self.assertIn("single query", str(raised.exception))
+
+    def test_two_statements_without_a_separator(self):
+        with self.assertRaises(GridQLSyntaxError) as raised:
+            parse_script("FIND feeders FIND reclosers")
+        self.assertIn("';'", str(raised.exception))
+
+    def test_comments_between_statements(self):
+        script = parse_script("-- first\nFIND feeders;\n# second\nFIND reclosers")
+        self.assertEqual(len(script), 2)
+
     def test_errors(self):
         for source in ("", "feeders", "FIND", "FIND devices WHERE", "FIND devices DOWNSTREAM",
-                       "FIND devices WHERE kva >=", "FIND devices WHERE (a", "FIND devices junk"):
+                       "FIND devices WHERE kva >=", "FIND devices WHERE (a", "FIND devices junk",
+                       "FIND devices SELECT", "FIND devices SELECT name,", "FIND devices RETURN"):
             with self.subTest(source=source), self.assertRaises(GridQLSyntaxError):
                 parse(source)
 

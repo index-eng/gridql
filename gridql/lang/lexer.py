@@ -52,6 +52,14 @@ def tokenize(source: str) -> list[Token]:
             tokens.append(Token(TokenKind.COMMA, ",", start))
             index += 1
             continue
+        if char == "*":
+            tokens.append(Token(TokenKind.STAR, "*", start))
+            index += 1
+            continue
+        if char == ";":
+            tokens.append(Token(TokenKind.SEMICOLON, ";", start))
+            index += 1
+            continue
 
         if char in "\"'":
             value, index = _read_string(source, index)
