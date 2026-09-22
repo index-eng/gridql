@@ -72,7 +72,8 @@ python3 -m unittest discover -s tests
 ## Your first queries
 
 Every command below works immediately: GridQL ships with a small sample feeder, **FDR-104**, and
-uses it whenever you do not point it at a database of your own.
+uses it whenever nothing points it at data of your own — no `--db`, no `--csv`, and no project
+file naming a dataset.
 
 ```
 Substation SUB-001 "Oakdale"  ·  Feeder FDR-104 @ 13.8 kV
@@ -123,13 +124,19 @@ gridql
 ```
 
 ```
-GridQL 0.1.0 -- sample network FDR-104 loaded.
+GridQL 0.1.0  Copyright (C) 2026 Index Labs, LLC
+Free software under AGPL-3.0-or-later, with NO WARRANTY; type '.license' for details.
+Loaded: GridQL sample project: the bundled sample network FDR-104.
 Type a query, '.help' for help, or '.quit' to exit.
 gridql>
 ```
 
-`.help` lists the syntax, `.types` lists every type and the CIM class it maps to, and `.quit`
-leaves.
+The `Loaded:` line names whatever is in effect — here, this repository's own project file and the
+sample feeder it falls back to.
+
+`.help` lists the syntax, `.types` lists every type and the CIM class it maps to, `.config` shows
+the project settings in effect, `.run <file> [name=value ...]` runs a saved query, `.validate`
+checks the model, and `.quit` leaves.
 
 ## The features, briefly
 
@@ -164,8 +171,10 @@ gridql 'FIND devices DOWNSTREAM OF "REC-001" WHERE NOT energized SELECT mRID, na
 ```
 mRID      name                  type
 --------  --------------------  -----------
-LOAD-002  Maple Ln Residential  load
 XFMR-002  Maple Ln Bank         transformer
+LOAD-002  Maple Ln Residential  load
+
+2 rows
 ```
 
 Those two are dark because SW-002 is open. They are still downstream of the recloser, and GridQL
@@ -230,6 +239,8 @@ gridql 'FIND loads DOWNSTREAM OF "REC-001" SELECT COUNT(*), SUM(kw), SUM(kvar)'
 COUNT(*)  SUM(kw)  SUM(kvar)
 --------  -------  ---------
 2         358      107
+
+1 row
 ```
 
 `COUNT`, `SUM`, `AVG`, `MIN` and `MAX` fold the match into one row. `GROUP BY` gives one row per
@@ -407,6 +418,7 @@ save_network(network, "grid.sqlite")
 | `gridql/config.py` | `project.gridqlconfig`: which dataset, which queries |
 | `gridql/data/sample.py` | the sample feeder, built through the public API |
 | `queries/` | example `.gridql` files |
+| `project.gridqlconfig` | this repository's own project file |
 | `tests/` | the test suite |
 | `idea.md` | the original design notes this was built from |
 
