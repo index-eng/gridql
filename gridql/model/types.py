@@ -117,5 +117,17 @@ def attribute_universe(type_key: str) -> frozenset[str]:
     return frozenset(names)
 
 
+def plural(type_key: str) -> str:
+    """The plural a user would type for a type key ('switch' -> 'switches').
+
+    Taken from the alias table rather than by adding an 's', so it stays
+    correct as the vocabulary grows.
+    """
+    for alias, key in TYPE_ALIASES.items():
+        if key == type_key and alias != type_key and alias.startswith(type_key):
+            return alias
+    return f"{type_key}s"
+
+
 def canonical_unit(attribute: str) -> str | None:
     return CANONICAL_UNITS.get(attribute.lower())

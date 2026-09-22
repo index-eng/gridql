@@ -18,6 +18,8 @@ XFMR-001  Elm St Bank  transformer  FDR-104  ABC     500  13.8             0.48
 This is the first milestone: the semantic model and the interpreter, with no storage layer and no
 CIM serialisation yet. Pure Python 3.11+, no dependencies.
 
+New here? [**Getting started**](GETTING_STARTED.md) walks through installing it and what it can do.
+
 ## Quickstart
 
 ```bash

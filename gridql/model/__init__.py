@@ -16,7 +16,14 @@ from .device import (
 )
 from .feeder import Feeder, Substation
 from .network import Network
-from .types import attribute_universe, canonical_unit, cim_class_for, class_for, resolve_type
+from .types import (
+    attribute_universe,
+    canonical_unit,
+    cim_class_for,
+    class_for,
+    plural,
+    resolve_type,
+)
 
 __all__ = [
     "MISSING",
@@ -38,5 +45,6 @@ __all__ = [
     "canonical_unit",
     "cim_class_for",
     "class_for",
+    "plural",
     "resolve_type",
 ]

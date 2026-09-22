@@ -251,10 +251,10 @@ def repl(network: Network, output_format: str | None, source: str = "sample netw
             print(_HELP)
             continue
         if lowered == ".types":
-            from .model.types import TYPE_CLASSES
+            from .model.types import TYPE_CLASSES, plural
 
             for key, cls in sorted(TYPE_CLASSES.items()):
-                print(f"  {key + 's':16s} -> CIM {cls.CIM_CLASS}")
+                print(f"  {plural(key):16s} -> CIM {cls.CIM_CLASS}")
             continue
         if lowered.startswith(".format"):
             parts = line.split()
