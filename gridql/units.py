@@ -38,8 +38,10 @@ _UNITS: dict[str, tuple[str, float]] = {
     "mi": ("length", 5280.0),
     "mile": ("length", 5280.0),
     "miles": ("length", 5280.0),
-    "m": ("length", 3.280839895),
-    "km": ("length", 3280.839895),
+    # The international foot is exactly 0.3048 m, so derive metric lengths
+    # from that instead of a rounded decimal.
+    "m": ("length", 1.0 / 0.3048),
+    "km": ("length", 1000.0 / 0.3048),
 }
 
 _QUANTITY_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*([A-Za-z]+)?\s*$")

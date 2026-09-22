@@ -28,6 +28,8 @@ python3 -m gridql.cli --explain 'FIND devices DOWNSTREAM OF "REC-001"'
 python3 -m gridql.cli run queries/feeder_analysis.gridql   # run a saved query
 python3 -m gridql.cli init grid.sqlite                 # create a database
 python3 -m gridql.cli --db grid.sqlite 'FIND feeders'  # query it
+python3 -m gridql.cli export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
+python3 -m gridql.cli import-cim feeder.xml
 python3 -m unittest discover -s tests                  # the test suite
 ```
 
@@ -53,7 +55,7 @@ FIND <type>
   [ DOWNSTREAM OF <device> | UPSTREAM OF <device> | CONNECTED TO <device> | FED BY <feeder> ]*
   [ WHERE <condition> ]
   [ SELECT <column>, ... ]
-  [ RETURN table | json | csv ]
+  [ RETURN table | json | csv | cim ]
 ```
 
 Clauses come in that order. Statements are separated by `;`.
@@ -124,8 +126,12 @@ something no such type could have — `SELECT kvaa` — is an error, with a sugg
 
 ### RETURN
 
-`RETURN table|json|csv` records the output format in the query itself, so a saved query renders
+`RETURN table|json|csv|cim` records the output format in the query itself, so a saved query renders
 the way its author intended. An explicit `--format` on the command line overrides it.
+
+`cim` is the interesting one: the result is emitted as a CIM RDF/XML document, so a query is how
+you carve a slice of the system out as a standards-based exchange file. See
+[CIM import and export](#cim-import-and-export).
 
 ### Units
 
@@ -245,6 +251,61 @@ A feeder restored from storage knows its head but has no "last added" device, so
 `feeder.add_switch("SW-NEW")` without `after=` raises rather than quietly leaving the new device
 unconnected.
 
+## CIM import and export
+
+GridQL is a translation layer as much as a query language. Pull out the part of the system you
+care about with a query, and get a standards-based CIM document back:
+
+```bash
+gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
+gridql export-cim - --query 'FIND transformers WHERE kva >= 500'   # to stdout
+gridql import-cim vendor-export.xml --db grid.sqlite
+```
+
+```
+FIND devices FED BY "FDR-104" RETURN cim
+```
+
+A slice brings what it needs with it: the feeder and substation that contain it, the
+`BaseVoltage` objects its equipment refers to, and the connectivity *among the selected
+equipment*. The result is a document that stands on its own.
+
+**What gets written.** Equipment uses its CIM class (`reclosers` → `ProtectedSwitch`,
+`transformers` → `PowerTransformer`, `loads` → `EnergyConsumer`), and values are converted to CIM's
+SI units — line length in metres, transformer ratings in VA on `PowerTransformerEnd` objects,
+load in W and VAr, voltages as `BaseVoltage` in volts.
+
+**Connectivity.** CIM never joins equipment directly: a device has `Terminal`s, and terminals meet
+at a `ConnectivityNode`. The model stores plain edges, so export synthesises one node per edge with
+two terminals, and import collapses them back. Importing a real bus — a node with more than two
+terminals — produces edges between every pair of devices on it, which keeps both `CONNECTED TO`
+and feeder traversal correct even though the node object itself is not preserved. The import report
+says when this happened.
+
+**Identifiers** are derived from mRIDs rather than freshly minted UUIDs, so exporting the same
+network twice gives byte-identical output and a diff means the network really changed. An mRID that
+is not a valid XML name is adjusted for `rdf:ID` and preserved exactly in
+`cim:IdentifiedObject.mRID`.
+
+**Extensions.** A few things the model needs have nowhere to live in CIM — which device heads a
+feeder, a phase string, the `extras` bag. Those are written in a private `gridql:` namespace, so a
+round trip is lossless while a standards-only consumer can ignore them. A full export and reimport
+of a network reproduces it exactly, which the test suite asserts object by object.
+
+**Reading other people's CIM.** The importer understands the specialisations other tools emit
+(`LoadBreakSwitch`, `Disconnector`, `ConformLoad`, …), reports any class it does not model rather
+than dropping it silently, and — when no head is recorded — infers the feeder head from the single
+breaker on the feeder, saying so. If it cannot, it tells you `DOWNSTREAM OF` will come back empty
+for that feeder rather than inventing an answer.
+
+```python
+from gridql import read_cim
+
+document = read_cim("vendor-export.xml")
+print(document.report.summary())
+network = document.network
+```
+
 ## Architecture
 
 ```
@@ -255,6 +316,8 @@ unconnected.
          Graph Model          gridql/model/network.py -- connectivity and traversal
                |
         SQLite storage        gridql/storage  -- schema and the NetworkLoader
+
+      CIM RDF/XML  <-->  gridql/cim  -- translation to and from the standard
 ```
 
 The language only ever calls the semantic model's public API, and the model knows nothing about
@@ -262,13 +325,15 @@ where its objects came from. That boundary is the point: swapping in SQLite, CIM
 changes the loader, not the language.
 
 Every class records the CIM class it maps to (`reclosers` → `ProtectedSwitch`, `transformers` →
-`PowerTransformer`, `loads` → `EnergyConsumer`, …), which is what CIM export will be built on.
+`PowerTransformer`, `loads` → `EnergyConsumer`, …), which is what CIM export is built on.
 
 ## Not built yet
 
-CIM import/export, GeoJSON output, CSV/JSON input loaders, and the editor — steps 5 and 6 of the
-design in `idea.md`. The CIM class annotations are already in place, so export builds on what the
-model records rather than requiring changes to it.
+GeoJSON output, CSV/JSON input loaders, and the editor — step 6 of the design in `idea.md`.
+
+The `EXPORT CIM FROM feeder "FDR-104" INCLUDING ...` statement from the design is not implemented
+as its own syntax; `RETURN cim` and `export-cim --query` express the same thing through clauses
+that already exist. Parameterized queries and `project.gridqlconfig` are also still open.
 
 From the `.gridql` section of the design, still to come: parameterized queries
 (`gridql run export_feeder.gridql --feeder FDR-104`, planned as a `PARAM feeder = "FDR-104"`

@@ -12,6 +12,7 @@ import io
 import json
 from typing import Any, Iterable
 
+from .cim import export_network
 from .lang.ast import OUTPUT_FORMATS
 from .lang.evaluator import Result
 
@@ -78,7 +79,14 @@ def to_csv(result: Result) -> str:
     return buffer.getvalue().rstrip("\n")
 
 
-_RENDERERS = {"table": to_table, "json": to_json, "csv": to_csv}
+def to_cim(result: Result) -> str:
+    """The result as a CIM RDF/XML document: the slice of grid it selected."""
+    if result.network is None:
+        raise ValueError("this result is not attached to a network, so it cannot export CIM")
+    return export_network(result.network, result.objects)
+
+
+_RENDERERS = {"table": to_table, "json": to_json, "csv": to_csv, "cim": to_cim}
 
 
 def render(result: Result, output_format: str = "table") -> str:
@@ -108,6 +116,15 @@ def render_script(results: list[Result], output_format: str | None = None) -> st
     """
     if not results:
         return ""
+
+    if output_format == "cim" or (
+        output_format is None and all(r.output_format == "cim" for r in results)
+    ):
+        network = next((r.network for r in results if r.network is not None), None)
+        if network is None:
+            raise ValueError("these results are not attached to a network")
+        selected = {obj.mrid: obj for result in results for obj in result.objects}
+        return export_network(network, list(selected.values()))
 
     if output_format == "json":
         return json.dumps(

@@ -5,6 +5,7 @@
     ['XFMR-001']
 """
 
+from .cim import export_network, import_network, read_cim
 from .data import build_sample_network
 from .errors import GridQLError, GridQLNameError, GridQLSyntaxError, UnitError
 from .formats import render, render_script
@@ -12,8 +13,7 @@ from .lang import Result, Script, evaluate, evaluate_script, execute, execute_sc
 from .model import Network
 from .script import read_script, run_file
 from .storage import load_network, save_network
-
-__version__ = "0.1.0"
+from .version import __version__
 
 __all__ = [
     "GridQLError",
@@ -27,11 +27,14 @@ __all__ = [
     "build_sample_network",
     "evaluate",
     "evaluate_script",
+    "export_network",
     "execute",
     "execute_script",
+    "import_network",
     "load_network",
     "parse",
     "parse_script",
+    "read_cim",
     "read_script",
     "render",
     "render_script",

@@ -149,7 +149,7 @@ class Relation(Node):
 
 
 #: Output formats a RETURN clause may name.
-OUTPUT_FORMATS = ("table", "json", "csv")
+OUTPUT_FORMATS = ("table", "json", "csv", "cim")
 
 
 @dataclass(frozen=True)

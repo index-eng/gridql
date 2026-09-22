@@ -6,13 +6,14 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__
+from .version import __version__
 from .data import build_sample_network
 from .errors import GridQLError, GridQLSyntaxError
 from .formats import FORMATS, render, render_script
 from .lang import Result, evaluate, parse
 from .model import Network
 from .model.types import class_for
+from .cim import export_network, export_summary, read_cim
 from .script import run_file
 from .storage import load_network, object_counts, save_network
 
@@ -41,6 +42,8 @@ _EPILOG = """examples:
   gridql --format json 'FIND transformers WHERE kva >= 500'
   gridql run queries/large_transformers.gridql
   gridql init grid.sqlite && gridql --db grid.sqlite 'FIND feeders'
+  gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
+  gridql import-cim feeder.xml --db imported.sqlite
 
 With no --db, queries run against the bundled sample feeder FDR-104."""
 
@@ -168,6 +171,67 @@ def init_database(path: str, empty: bool = False, force: bool = False) -> str:
     return f"wrote {written or 'an empty schema'} to {path}"
 
 
+def build_export_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gridql export-cim",
+        description="Write a network, or the slice a query selects, as CIM RDF/XML.",
+    )
+    parser.add_argument("path", help="file to write, or - for standard output")
+    parser.add_argument(
+        "--query",
+        metavar="GRIDQL",
+        default=None,
+        help="export only what this query selects, with the containers it needs",
+    )
+    parser.add_argument(
+        "--db", metavar="PATH", default=None, help="read the network from this database"
+    )
+    return parser
+
+
+def build_import_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gridql import-cim",
+        description="Read a CIM RDF/XML file, reporting what it contained.",
+    )
+    parser.add_argument("path", help="the CIM file to read")
+    parser.add_argument(
+        "--db", metavar="PATH", default=None, help="save the imported network to this database"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="overwrite the database if it already exists"
+    )
+    return parser
+
+
+def export_cim(path: str, query: str | None = None, db: str | None = None) -> str:
+    network = network_for(db)
+    objects = None if query is None else evaluate(network, parse(query)).objects
+
+    if path == "-":
+        return export_network(network, objects)
+
+    counts = export_summary(network, objects)
+    export_network(network, objects, path=path)
+    return (
+        f"wrote {counts['devices']} devices, {counts['feeders']} feeders, "
+        f"{counts['substations']} substations and {counts['connections']} connections to {path}"
+    )
+
+
+def import_cim(path: str, db: str | None = None, force: bool = False) -> str:
+    document = read_cim(path)
+    lines = [document.report.summary()]
+
+    if db is not None:
+        if Path(db).exists() and not force:
+            raise GridQLError(f"{db} already exists; pass --force to overwrite it")
+        save_network(document.network, db)
+        lines.append(f"saved to {db}")
+
+    return "\n".join(lines)
+
+
 def repl(network: Network, output_format: str | None, source: str = "sample network FDR-104") -> int:
     print(_BANNER.replace("sample network FDR-104", source))
     while True:
@@ -230,6 +294,14 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "init":
         args = build_init_parser().parse_args(argv[1:])
         return _emit(lambda: init_database(args.path, args.empty, args.force))
+
+    if argv and argv[0] == "export-cim":
+        args = build_export_parser().parse_args(argv[1:])
+        return _emit(lambda: export_cim(args.path, args.query, args.db))
+
+    if argv and argv[0] == "import-cim":
+        args = build_import_parser().parse_args(argv[1:])
+        return _emit(lambda: import_cim(args.path, args.db, args.force))
 
     if argv and argv[0] == "run":
         args = build_run_parser().parse_args(argv[1:])
