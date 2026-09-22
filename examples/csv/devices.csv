@@ -1,0 +1,12 @@
+mrid,name,type,feeder,substation,phases,voltage,state,normal_state,is_tie,kva,primary_voltage,secondary_voltage,kw,kvar,length,conductor,ampacity
+BRK-001,Oakdale 104 Breaker,breaker,FDR-104,SUB-001,ABC,13.8,CLOSED,CLOSED,false,,,,,,,,
+LN-001,LN-001,line,FDR-104,SUB-001,ABC,13.8,,,,,,,,,2400,336 ACSR,530
+LN-002,LN-002,line,FDR-104,SUB-001,ABC,13.8,,,,,,,,,5100,336 ACSR,530
+LOAD-001,Elm St Commercial,load,FDR-104,SUB-001,ABC,0.48,,,,,,,310,95,,,
+LOAD-002,Maple Ln Residential,load,FDR-104,SUB-001,A,0.24,,,,,,,48,12,,,
+REC-001,Mainline Recloser,recloser,FDR-104,SUB-001,ABC,13.8,CLOSED,CLOSED,false,,,,,,,,
+SW-001,Mainline Sectionalizing Switch,switch,FDR-104,SUB-001,ABC,13.8,CLOSED,CLOSED,false,,,,,,,,
+SW-002,Maple Ln Lateral Switch,switch,FDR-104,SUB-001,ABC,13.8,OPEN,CLOSED,false,,,,,,,,
+TIE-001,Tie to FDR-107,switch,FDR-104,SUB-001,ABC,13.8,OPEN,OPEN,true,,,,,,,,
+XFMR-001,Elm St Bank,transformer,FDR-104,SUB-001,ABC,13.8,,,,500,13.8,0.48,,,,,
+XFMR-002,Maple Ln Bank,transformer,FDR-104,SUB-001,A,13.8,,,,75,13.8,0.24,,,,,

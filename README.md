@@ -343,6 +343,63 @@ for finding in report:
     print(finding.severity, finding.code, finding.message)
 ```
 
+## Loading your own data
+
+CSV is what a utility will actually hand you, so GridQL reads the shape people already keep in
+spreadsheets and GIS exports:
+
+```
+gis-export/
+  devices.csv       mrid, name, type, feeder, ...   (required)
+  connections.csv   from_device, to_device          (optional)
+  feeders.csv       mrid, name, voltage, head       (optional)
+  substations.csv   mrid, name, voltage             (optional)
+```
+
+```bash
+gridql --csv ./gis-export 'FIND transformers WHERE kva >= 500'   # query it in place
+gridql import-csv ./gis-export --db grid.sqlite                  # or load it once
+gridql export-csv ./out --db grid.sqlite                         # and back out again
+```
+
+`--csv` works anywhere `--db` does, including `run` and `validate`. A single file is taken to be
+the equipment list. There is a worked example in [`examples/csv/`](examples/csv/).
+
+**Real exports never use the column names you expect**, so headers are matched case-insensitively
+against a table of aliases — `OBJECTID`, `Device Type`, `Circuit`, `Normal Position`, `kV`,
+`Rating kVA` and friends all land where they should. Cells may carry units, so `12470 V` and
+`0.5MVA` are read as 12.47 kV and 500 kVA.
+
+**Columns GridQL does not recognise are kept, not dropped**, which means a utility's own fields
+stay queryable:
+
+```
+FIND breakers WHERE install_year < 2000 SELECT mRID, install_year
+```
+
+An identifier with a leading zero stays text, so pole number `00412` survives.
+
+**Types** are read as GridQL names (`recloser`, `xfmr`) or as CIM class names, since a GIS export
+usually uses those — `LoadBreakSwitch`, `Disconnector`, `PowerTransformer`, `ACLineSegment`. A type
+GridQL does not model is loaded as generic equipment with the original kept in `source_type`, and
+reported rather than silently reshaped.
+
+**Bad rows are reported, not fatal.** A row with no mRID, a duplicate, an unreadable number, a
+connection to a device that is not in the file — each is skipped with its line number, and the
+rest of the file loads:
+
+```
+loaded 6 devices, 1 feeders, 0 substations, 4 connections
+4 row(s) skipped or incomplete:
+  devices.csv:7: voltage: could not read 'not-a-voltage' as a quantity
+  devices.csv:8: no mRID
+  connections.csv:6: unknown device 'GHOST-99'
+```
+
+Feeders and substations are created from whatever the devices refer to, and a feeder carrying
+exactly one breaker gets it as the head — with anything less clear reported rather than guessed,
+the same rule CIM import uses.
+
 ## Persistence
 
 A network can be stored in SQLite and loaded back identically — same objects, same connectivity,
@@ -447,6 +504,7 @@ network = document.network
          Graph Model          gridql/model/network.py -- connectivity and traversal
                |
         SQLite storage        gridql/storage  -- schema and the NetworkLoader
+         CSV in and out       gridql/ingest   -- the format utilities hand you
 
       CIM RDF/XML  <-->  gridql/cim  -- translation to and from the standard
 
@@ -481,7 +539,7 @@ Labs, LLC.
 
 ## Not built yet
 
-GeoJSON output, CSV/JSON input loaders, and the editor — step 6 of the design in `idea.md`.
+GeoJSON output and device geometry, a JSON model format, and the editor.
 
 The `EXPORT CIM FROM feeder "FDR-104" INCLUDING ...` statement from the design is not implemented
 as its own syntax; `RETURN cim` and `export-cim --query` express the same thing through clauses

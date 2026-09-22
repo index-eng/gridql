@@ -279,6 +279,19 @@ gridql run queries/feeder_analysis.gridql
 Files hold one or more statements separated by `;`, take `--` and `#` comments, and can name their
 own output format with `RETURN`. Four worked examples live in [`queries/`](queries/).
 
+### Loading your own data
+
+```bash
+gridql --csv ./gis-export 'FIND transformers WHERE kva >= 500'
+gridql import-csv ./gis-export --db grid.sqlite
+```
+
+A `devices.csv` is all that is strictly required; `connections.csv`, `feeders.csv` and
+`substations.csv` are optional. Column names are matched loosely (`OBJECTID`, `Device Type`,
+`Circuit`, `kV` all work), cells may carry units (`12470 V`, `0.5MVA`), and any column GridQL does
+not recognise is kept as a queryable attribute rather than dropped. Bad rows are reported with
+their line number instead of stopping the load. See [`examples/csv/`](examples/csv/) for the shape.
+
 ### Persistence: SQLite
 
 ```bash
@@ -342,6 +355,7 @@ save_network(network, "grid.sqlite")
 | `gridql/lang/` | the language: lexer, parser, AST, evaluator |
 | `gridql/model/` | the semantic model: equipment, containers, the connectivity graph |
 | `gridql/storage/` | the SQLite schema and loader |
+| `gridql/ingest/` | reading and writing CSV |
 | `gridql/cim/` | CIM import and export |
 | `gridql/validate.py` | model validation |
 | `gridql/data/sample.py` | the sample feeder, built through the public API |
@@ -351,7 +365,7 @@ save_network(network, "grid.sqlite")
 
 ## Not built yet
 
-An editor, GeoJSON output, CSV/JSON input loaders, parameterized queries
+An editor, GeoJSON output and device geometry, parameterized queries
 (`gridql run foo.gridql --feeder FDR-104`) and a project config file. The `EXPORT CIM` statement
 from the design notes is not its own syntax — `RETURN cim` and `export-cim --query` do the same job
 with clauses that already exist.

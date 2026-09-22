@@ -21,7 +21,7 @@ from collections import deque
 from typing import Any, Iterable, Iterator
 
 from ..errors import GridQLNameError
-from .device import MISSING, Device, GridObject, Switch
+from .device import MISSING, Breaker, Device, GridObject, Switch
 from .feeder import Feeder, Substation
 
 
@@ -188,6 +188,39 @@ class Network:
         if isinstance(obj, Substation):
             return MISSING
         return self.topology().energized(mrid)
+
+    def infer_heads(self) -> list[str]:
+        """Give every headless feeder a source device where one is obvious.
+
+        A feeder is energised through a breaker at the substation, so a
+        feeder carrying exactly one breaker has an unambiguous head. Anything
+        less clear is left alone and reported: a wrong head would silently
+        invert a circuit's topology, which is worse than no topology at all.
+
+        Returns a note per feeder it had to think about.
+        """
+        notes: list[str] = []
+        for feeder in self.feeders:
+            if feeder.head is not None:
+                continue
+            breakers = [
+                device.mrid
+                for device in self.devices
+                if device.feeder == feeder.mrid and isinstance(device, Breaker)
+            ]
+            if len(breakers) == 1:
+                feeder.head = breakers[0]
+                notes.append(
+                    f"{feeder.mrid}: no head recorded, inferred {breakers[0]} "
+                    "as the only breaker on the feeder"
+                )
+            else:
+                notes.append(
+                    f"{feeder.mrid}: no head recorded and none could be inferred, so "
+                    "DOWNSTREAM OF / UPSTREAM OF will return nothing for it; "
+                    "set feeder.head to fix"
+                )
+        return notes
 
     def _resolve(self, mrids: Iterable[str]) -> list[GridObject]:
         return [self.objects[m] for m in mrids if m in self.objects]

@@ -19,6 +19,7 @@ offered your modified source.
 
 from .cim import export_network, import_network, read_cim
 from .data import build_sample_network
+from .ingest import load_csv, read_csv, write_csv
 from .errors import GridQLError, GridQLNameError, GridQLSyntaxError, UnitError
 from .formats import render, render_script
 from .lang import Result, Script, evaluate, evaluate_script, execute, execute_script, parse, parse_script
@@ -46,14 +47,17 @@ __all__ = [
     "execute",
     "execute_script",
     "import_network",
+    "load_csv",
     "load_network",
     "parse",
     "parse_script",
     "read_cim",
+    "read_csv",
     "read_script",
     "render",
     "render_script",
     "run_file",
     "save_network",
+    "write_csv",
     "validate",
 ]

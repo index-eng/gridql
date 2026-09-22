@@ -189,7 +189,7 @@ def evaluate(network: Network, query: Query) -> Result:
         allowed = {obj.mrid for obj in related}
         objects = [obj for obj in objects if obj.mrid in allowed]
 
-    select = _projection(query, type_key, distances)
+    select = _projection(query, type_key, distances, objects)
 
     if query.where is not None:
         context = _Context(network, attribute_universe(type_key), distances)
@@ -238,11 +238,18 @@ def _distances(network: Network, relation, related: list[GridObject]) -> dict[st
 
 
 def _projection(
-    query: Query, type_key: str, distances: dict[str, int] | None = None
+    query: Query,
+    type_key: str,
+    distances: dict[str, int] | None = None,
+    objects: list[GridObject] | None = None,
 ) -> tuple[SelectItem, ...] | None:
     """The effective SELECT list, with GROUP BY's default filled in and checked."""
     select = query.select
-    known = attribute_universe(type_key)
+    # Whatever the matched equipment actually carries counts as known, so the
+    # utility's own columns are as selectable as they are filterable.
+    known = attribute_universe(type_key) | frozenset(
+        key.lower() for obj in objects or () for key in obj.extras
+    )
 
     referenced = (
         {item.attribute.lower() for item in select or ()}

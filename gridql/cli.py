@@ -17,6 +17,7 @@ from .lang import Result, evaluate, parse
 from .model import Network
 from .model.types import class_for
 from .cim import export_network, export_summary, read_cim
+from .ingest import read_csv, write_csv
 from .script import run_file
 from .storage import load_network, object_counts, save_network
 from .validate import validate
@@ -73,6 +74,8 @@ _EPILOG = """examples:
   gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
   gridql import-cim feeder.xml --db imported.sqlite
   gridql validate --db grid.sqlite
+  gridql --csv ./gis-export 'FIND transformers WHERE kva >= 500'
+  gridql import-csv ./gis-export --db grid.sqlite
 
 With no --db, queries run against the bundled sample feeder FDR-104."""
 
@@ -123,11 +126,23 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="query a GridQL SQLite database instead of the bundled sample network",
     )
+    parser.add_argument(
+        "--csv",
+        metavar="PATH",
+        default=None,
+        help="query a directory of CSV files (or a single devices file) directly",
+    )
 
 
-def network_for(db: str | None) -> Network:
-    """The network a command runs against: a database, or the sample."""
-    return build_sample_network() if db is None else load_network(db)
+def network_for(db: str | None = None, csv: str | None = None) -> Network:
+    """The network a command runs against: a database, CSV files, or the sample."""
+    if db and csv:
+        raise GridQLError("pass either --db or --csv, not both")
+    if csv:
+        return read_csv(csv).network
+    if db:
+        return load_network(db)
+    return build_sample_network()
 
 
 def explain(network: Network, result: Result, output_format: str | None) -> str:
@@ -206,6 +221,59 @@ def init_database(path: str, empty: bool = False, force: bool = False) -> str:
     return f"wrote {written or 'an empty schema'} to {path}"
 
 
+def build_import_csv_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gridql import-csv",
+        description="Read a directory of CSV files, reporting what they contained.",
+    )
+    parser.add_argument("path", help="directory of CSV files, or a single devices file")
+    parser.add_argument(
+        "--db", metavar="PATH", default=None, help="save the loaded network to this database"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="overwrite the database if it already exists"
+    )
+    return parser
+
+
+def build_export_csv_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gridql export-csv",
+        description="Write a network out as CSV files.",
+    )
+    parser.add_argument("path", help="directory to write into")
+    parser.add_argument("--db", metavar="PATH", default=None, help="read from this database")
+    parser.add_argument("--csv", metavar="PATH", default=None, help="read from these CSV files")
+    return parser
+
+
+def import_csv(path: str, db: str | None = None, force: bool = False) -> str:
+    document = read_csv(path)
+    lines = [document.report.summary()]
+
+    report = validate(document.network)
+    where = f" --db {db}" if db else f" --csv {path}"
+    lines.append(
+        "validation: no problems found"
+        if not report
+        else f"validation: {report.counts()} -- run 'gridql validate{where}' for detail"
+    )
+
+    if db is not None:
+        if Path(db).exists() and not force:
+            raise GridQLError(f"{db} already exists; pass --force to overwrite it")
+        save_network(document.network, db)
+        lines.append(f"saved to {db}")
+
+    return "\n".join(lines)
+
+
+def export_csv(path: str, db: str | None = None, csv: str | None = None) -> str:
+    network = network_for(db, csv)
+    written = write_csv(network, path)
+    return f"wrote {', '.join(p.name for p in written)} to {path}"
+
+
 def build_export_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gridql export-cim",
@@ -220,6 +288,9 @@ def build_export_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--db", metavar="PATH", default=None, help="read the network from this database"
+    )
+    parser.add_argument(
+        "--csv", metavar="PATH", default=None, help="read the network from CSV files"
     )
     return parser
 
@@ -248,15 +319,18 @@ def build_validate_parser() -> argparse.ArgumentParser:
         "--db", metavar="PATH", default=None, help="validate this database"
     )
     parser.add_argument(
+        "--csv", metavar="PATH", default=None, help="validate these CSV files"
+    )
+    parser.add_argument(
         "--strict", action="store_true", help="exit non-zero on warnings as well as errors"
     )
     return parser
 
 
-def run_validate(db: str | None = None, strict: bool = False) -> int:
+def run_validate(db: str | None = None, strict: bool = False, csv: str | None = None) -> int:
     """Print a validation report. Exit non-zero when the model is unsound."""
     try:
-        report = validate(network_for(db))
+        report = validate(network_for(db, csv))
     except GridQLError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
@@ -265,8 +339,10 @@ def run_validate(db: str | None = None, strict: bool = False) -> int:
     return 1 if report.errors or (strict and report.warnings) else 0
 
 
-def export_cim(path: str, query: str | None = None, db: str | None = None) -> str:
-    network = network_for(db)
+def export_cim(
+    path: str, query: str | None = None, db: str | None = None, csv: str | None = None
+) -> str:
+    network = network_for(db, csv)
     objects = None if query is None else evaluate(network, parse(query)).objects
 
     if path == "-":
@@ -372,11 +448,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if argv and argv[0] == "validate":
         args = build_validate_parser().parse_args(argv[1:])
-        return run_validate(args.db, args.strict)
+        return run_validate(args.db, args.strict, args.csv)
+
+    if argv and argv[0] == "import-csv":
+        args = build_import_csv_parser().parse_args(argv[1:])
+        return _emit(lambda: import_csv(args.path, args.db, args.force))
+
+    if argv and argv[0] == "export-csv":
+        args = build_export_csv_parser().parse_args(argv[1:])
+        return _emit(lambda: export_csv(args.path, args.db, args.csv))
 
     if argv and argv[0] == "export-cim":
         args = build_export_parser().parse_args(argv[1:])
-        return _emit(lambda: export_cim(args.path, args.query, args.db))
+        return _emit(lambda: export_cim(args.path, args.query, args.db, args.csv))
 
     if argv and argv[0] == "import-cim":
         args = build_import_parser().parse_args(argv[1:])
@@ -385,21 +469,21 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "run":
         args = build_run_parser().parse_args(argv[1:])
         return _emit(
-            lambda: run_script(network_for(args.db), args.file, args.format, args.explain)
+            lambda: run_script(network_for(args.db, args.csv), args.file, args.format, args.explain)
         )
 
     args = build_parser().parse_args(argv)
 
     if args.query is None:
         try:
-            network = network_for(args.db)
+            network = network_for(args.db, args.csv)
         except GridQLError as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
-        return repl(network, args.format, args.db or "sample network FDR-104")
+        return repl(network, args.format, args.db or args.csv or "sample network FDR-104")
 
     return _emit(
-        lambda: run_query(network_for(args.db), args.query, args.format, args.explain)
+        lambda: run_query(network_for(args.db, args.csv), args.query, args.format, args.explain)
     )
 
 

@@ -22,7 +22,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from ..errors import GridQLError
-from ..model import Breaker, Capacitor, Device, LineSegment, Load, Network, Switch, Transformer
+from ..model import Capacitor, Device, LineSegment, Load, Network, Switch, Transformer
 from ..model.feeder import Feeder, Substation
 from ..units import convert
 from .vocabulary import (
@@ -366,25 +366,7 @@ def _assign_heads(network: Network, heads: dict[str, str | None], report: Import
         recorded = heads.get(feeder.mrid)
         if recorded and recorded in network.objects:
             feeder.head = recorded
-            continue
-
-        breakers = [
-            device.mrid
-            for device in network.devices
-            if device.feeder == feeder.mrid and isinstance(device, Breaker)
-        ]
-        if len(breakers) == 1:
-            feeder.head = breakers[0]
-            report.notes.append(
-                f"{feeder.mrid}: no head recorded, inferred {breakers[0]} "
-                "as the only breaker on the feeder"
-            )
-        else:
-            report.notes.append(
-                f"{feeder.mrid}: no head recorded and none could be inferred, so "
-                "DOWNSTREAM OF / UPSTREAM OF will return nothing for it; "
-                "set feeder.head to fix"
-            )
+    report.notes.extend(network.infer_heads())
 
 
 # -- small conversions --------------------------------------------------
