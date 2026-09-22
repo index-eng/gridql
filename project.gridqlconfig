@@ -1,0 +1,20 @@
+# GridQL's own project file, which is also the worked example of the format.
+#
+#   gridql config                  # what is in effect here
+#   gridql run feeder_report       # a query by name, from anywhere in the tree
+#
+# Found by walking up from the working directory, so it applies to the whole
+# repository. Paths resolve against this file, and everything here is a
+# default that --db, --csv and --<param> override.
+
+name    = "GridQL sample project"
+queries = "queries"
+
+# No dataset is named, so queries run against the bundled sample feeder.
+# A real project points at its own:
+#
+#   db  = "grid.sqlite"
+#   csv = "gis-export"
+
+[params]
+feeder = "FDR-104"

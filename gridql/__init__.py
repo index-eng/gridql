@@ -18,11 +18,29 @@ offered your modified source.
 """
 
 from .cim import export_network, import_network, read_cim
+from .config import Config, find_config, load_config, project_config
 from .data import build_sample_network
 from .ingest import load_csv, read_csv, write_csv
-from .errors import GridQLError, GridQLNameError, GridQLSyntaxError, UnitError
+from .errors import (
+    GridQLError,
+    GridQLNameError,
+    GridQLSyntaxError,
+    ParameterError,
+    UnitError,
+)
 from .formats import render, render_script
-from .lang import Result, Script, evaluate, evaluate_script, execute, execute_script, parse, parse_script
+from .lang import (
+    Param,
+    Result,
+    Script,
+    bind_script,
+    evaluate,
+    evaluate_script,
+    execute,
+    execute_script,
+    parse,
+    parse_script,
+)
 from .model import Network
 from .script import read_script, run_file
 from .storage import load_network, save_network
@@ -30,27 +48,34 @@ from .validate import Finding, ValidationReport, validate
 from .version import __version__
 
 __all__ = [
+    "Config",
     "GridQLError",
     "GridQLNameError",
     "GridQLSyntaxError",
     "Network",
     "Finding",
+    "Param",
+    "ParameterError",
     "Result",
     "Script",
     "UnitError",
     "ValidationReport",
     "__version__",
+    "bind_script",
     "build_sample_network",
     "evaluate",
     "evaluate_script",
     "export_network",
     "execute",
+    "find_config",
     "execute_script",
     "import_network",
+    "load_config",
     "load_csv",
     "load_network",
     "parse",
     "parse_script",
+    "project_config",
     "read_cim",
     "read_csv",
     "read_script",

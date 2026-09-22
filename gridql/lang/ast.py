@@ -53,6 +53,52 @@ class Name(Node):
         return self.name
 
 
+@dataclass(frozen=True)
+class ParamRef(Node):
+    """``$feeder``: a value the query does not know until it is run."""
+
+    name: str
+    position: int = 0
+
+    def describe(self) -> str:
+        return f"${self.name}"
+
+
+@dataclass(frozen=True)
+class Param(Node):
+    """A ``PARAM`` declaration at the head of a .gridql file.
+
+    A parameter with no default is required, so running the file without it
+    is refused rather than answered against whatever the file last named.
+    """
+
+    name: str
+    default: Node | None = None
+    position: int = 0
+
+    @property
+    def required(self) -> bool:
+        return self.default is None
+
+    def describe(self) -> str:
+        if self.default is None:
+            return f"PARAM {self.name}"
+        return f"PARAM {self.name} = {source_text(self.default)}"
+
+
+def source_text(node: Node) -> str:
+    """A value node written the way a query would write it.
+
+    ``describe`` renders for diagnostics -- this renders for re-reading, so a
+    described script parses back to the same thing.
+    """
+    if isinstance(node, Literal):
+        if isinstance(node.value, bool):
+            return "TRUE" if node.value else "FALSE"
+        return '"{}"'.format(str(node.value).replace('"', '\\"'))
+    return node.describe()
+
+
 # -- predicates ---------------------------------------------------------
 
 
@@ -137,10 +183,14 @@ RELATION_METHODS = {
 
 @dataclass(frozen=True)
 class Relation(Node):
-    """A topology constraint, such as ``DOWNSTREAM OF "REC-001"``."""
+    """A topology constraint, such as ``DOWNSTREAM OF "REC-001"``.
+
+    The target is a device name, or a :class:`ParamRef` until the script it
+    came from is bound.
+    """
 
     kind: str
-    target: str
+    target: str | ParamRef
     position: int = 0
 
     @property
@@ -148,6 +198,8 @@ class Relation(Node):
         return RELATION_METHODS[self.kind]
 
     def describe(self) -> str:
+        if isinstance(self.target, ParamRef):
+            return f"{self.kind} {self.target.describe()}"
         return f'{self.kind} "{self.target}"'
 
 
@@ -199,7 +251,7 @@ class Query(Node):
     select: tuple[SelectItem, ...] | None = None
     group_by: tuple[str, ...] | None = None
     order_by: tuple[SortKey, ...] | None = None
-    limit: int | None = None
+    limit: int | ParamRef | None = None
     return_format: str | None = None
     source: str = field(default="", compare=False)
 
@@ -222,7 +274,10 @@ class Query(Node):
         if self.order_by is not None:
             parts.append(f"ORDER BY {', '.join(k.describe() for k in self.order_by)}")
         if self.limit is not None:
-            parts.append(f"LIMIT {self.limit}")
+            limit = self.limit
+            parts.append(
+                f"LIMIT {limit.describe() if isinstance(limit, ParamRef) else limit}"
+            )
         if self.return_format is not None:
             parts.append(f"RETURN {self.return_format}")
         return "\n".join(parts)
@@ -233,6 +288,7 @@ class Script(Node):
     """The statements of one .gridql file, in the order they will run."""
 
     statements: tuple[Query, ...]
+    params: tuple[Param, ...] = ()
     source: str = field(default="", compare=False)
     path: str | None = field(default=None, compare=False)
 
@@ -242,5 +298,18 @@ class Script(Node):
     def __len__(self) -> int:
         return len(self.statements)
 
+    def param(self, name: str) -> Param | None:
+        """The declaration of ``name``, matched case-insensitively."""
+        wanted = name.lower()
+        return next((p for p in self.params if p.name.lower() == wanted), None)
+
+    @property
+    def required_params(self) -> tuple[Param, ...]:
+        return tuple(p for p in self.params if p.required)
+
     def describe(self) -> str:
-        return ";\n\n".join(statement.describe() for statement in self.statements)
+        body = ";\n\n".join(statement.describe() for statement in self.statements)
+        if not self.params:
+            return body
+        declarations = "\n".join(p.describe() for p in self.params)
+        return f"{declarations}\n\n{body}"

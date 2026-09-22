@@ -9,7 +9,9 @@ Two details matter for a utility-facing language:
   all -- the language has no arithmetic, so a hyphen inside a word is never
   ambiguous;
 * numbers may carry a unit (``13.8kV``, ``0.5MVA``), which is kept on the
-  token and resolved against the attribute being compared.
+  token and resolved against the attribute being compared;
+* ``$feeder`` is a parameter reference, so a saved query can be run against
+  whichever circuit the engineer names today.
 """
 
 from __future__ import annotations
@@ -67,6 +69,14 @@ def tokenize(source: str) -> list[Token]:
         if char in "\"'":
             value, index = _read_string(source, index)
             tokens.append(Token(TokenKind.STRING, value, start))
+            continue
+
+        # $feeder -- a reference to a PARAM declared at the head of the file.
+        if char == "$":
+            if index + 1 >= length or source[index + 1] not in _IDENT_START:
+                raise GridQLSyntaxError("expected a parameter name after '$'", source, start)
+            word, index = _read_ident(source, index + 1)
+            tokens.append(Token(TokenKind.PARAM, word, start))
             continue
 
         # A number, or a negative number. A '-' followed by a digit can only

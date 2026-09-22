@@ -1,0 +1,34 @@
+-- A circuit walk-down that works on any feeder.
+--
+--   gridql run queries/feeder_report.gridql
+--   gridql run queries/feeder_report.gridql --feeder FDR-201 --min_kva 0.5MVA
+--
+-- The defaults make the file runnable as it stands; a project.gridqlconfig
+-- can set its own, and the command line beats both.
+
+PARAM feeder  = "FDR-104"
+PARAM min_kva = 0
+PARAM worst   = 5
+
+-- What is on the circuit, by equipment type.
+FIND devices
+FED BY $feeder
+SELECT type, COUNT(*)
+GROUP BY type
+ORDER BY COUNT(*) DESC
+RETURN table;
+
+-- Its service transformers, biggest first.
+FIND transformers
+FED BY $feeder
+WHERE kva >= $min_kva
+SELECT mRID, name, kva, primary_voltage, secondary_voltage
+ORDER BY kva DESC
+LIMIT $worst
+RETURN table;
+
+-- And the load it carries, which is what a transfer has to be able to pick up.
+FIND loads
+FED BY $feeder
+SELECT COUNT(*), SUM(kw), SUM(kvar)
+RETURN table

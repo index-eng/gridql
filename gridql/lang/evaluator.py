@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from ..errors import GridQLError, GridQLNameError, UnitError
 from ..model import MISSING, GridObject, Network
@@ -35,6 +35,7 @@ from .ast import (
     SelectItem,
     Truthy,
 )
+from .binding import bind_script
 from .parser import parse, parse_script
 
 #: Attribute names whose value depends on the query, not on the object.
@@ -166,12 +167,27 @@ def execute(network: Network, source: str) -> Result:
     return evaluate(network, parse(source))
 
 
-def execute_script(network: Network, source: str, path: str | None = None) -> list[Result]:
+def execute_script(
+    network: Network,
+    source: str,
+    path: str | None = None,
+    params: Mapping[str, Any] | None = None,
+) -> list[Result]:
     """Parse and run every statement of a .gridql script, in order."""
-    return evaluate_script(network, parse_script(source, path))
+    return evaluate_script(network, parse_script(source, path), params)
 
 
-def evaluate_script(network: Network, script: Script) -> list[Result]:
+def evaluate_script(
+    network: Network, script: Script, params: Mapping[str, Any] | None = None
+) -> list[Result]:
+    """Run a script, binding its parameters first.
+
+    A script whose parameters all have defaults runs with no values at all;
+    one with a required parameter is refused rather than run with a hole in
+    it.
+    """
+    if script.params or params:
+        script = bind_script(script, params)
     return [evaluate(network, statement) for statement in script.statements]
 
 

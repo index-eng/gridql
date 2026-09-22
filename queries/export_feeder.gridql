@@ -1,0 +1,15 @@
+-- Carve one circuit out of the system as a CIM exchange file.
+--
+--   gridql run queries/export_feeder.gridql --feeder FDR-104 > FDR-104.xml
+--
+-- The design sketched this as EXPORT CIM FROM feeder "FDR-104" INCLUDING ...;
+-- FED BY and RETURN cim say the same thing with clauses that already exist,
+-- and the slice brings its containers, base voltages and connectivity along.
+
+-- No default: an export has to say which circuit it is of. Inside this
+-- repository project.gridqlconfig supplies one; elsewhere, --feeder does.
+PARAM feeder
+
+FIND devices
+FED BY $feeder
+RETURN cim

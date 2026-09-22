@@ -10,15 +10,16 @@ import sys
 from pathlib import Path
 
 from .version import __version__
+from .config import CONFIG_NAME, Config, project_config, resolve_script
 from .data import build_sample_network
 from .errors import GridQLError, GridQLSyntaxError
 from .formats import FORMATS, render, render_script
-from .lang import Result, evaluate, parse
+from .lang import Result, evaluate, evaluate_script, parse
 from .model import Network
 from .model.types import class_for
 from .cim import export_network, export_summary, read_cim
 from .ingest import read_csv, write_csv
-from .script import run_file
+from .script import read_script
 from .storage import load_network, object_counts, save_network
 from .validate import validate
 
@@ -63,13 +64,18 @@ Filters:    = != > >= < <= IN (...) CONTAINS, combined with AND / OR / NOT
 Units:      13.8kV, 500kVA, 0.5MVA -- bare numbers use the attribute's own unit
 
 Save a query as a .gridql file and run it with:  gridql run queries/foo.gridql
+A file may declare PARAM feeder = "FDR-104" and use $feeder; supply another
+with:  gridql run queries/foo.gridql --feeder FDR-201
 
-Commands:   .help  .types  .format <...>  .run <file>  .validate  .license  .quit"""
+Commands:   .help  .types  .format <...>  .run <file> [name=value ...]
+            .config  .validate  .license  .quit"""
 
 _EPILOG = """examples:
   gridql 'FIND reclosers'
   gridql --format json 'FIND transformers WHERE kva >= 500'
   gridql run queries/large_transformers.gridql
+  gridql run queries/feeder_report.gridql --feeder FDR-104 --min_kva 0.5MVA
+  gridql config
   gridql init grid.sqlite && gridql --db grid.sqlite 'FIND feeders'
   gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
   gridql import-cim feeder.xml --db imported.sqlite
@@ -77,7 +83,8 @@ _EPILOG = """examples:
   gridql --csv ./gis-export 'FIND transformers WHERE kva >= 500'
   gridql import-csv ./gis-export --db grid.sqlite
 
-With no --db, queries run against the bundled sample feeder FDR-104."""
+With no --db and no project.gridqlconfig, queries run against the bundled
+sample feeder FDR-104. Run 'gridql config' to see what is in effect."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -101,10 +108,126 @@ def build_run_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gridql run",
         description="Run the statements of a .gridql file, in order.",
+        epilog=(
+            "A file's PARAM declarations are supplied as options:\n"
+            "  gridql run export_feeder.gridql --feeder FDR-104\n"
+            "  gridql run export_feeder.gridql --param feeder=FDR-104\n\n"
+            "Use --param for a parameter whose name is also a gridql option."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        # A parameter must not be swallowed as an abbreviation of an option.
+        allow_abbrev=False,
     )
-    parser.add_argument("file", help="path to a .gridql file")
+    parser.add_argument("file", help="a .gridql file, or a query name in the project")
+    parser.add_argument(
+        "--param",
+        metavar="NAME=VALUE",
+        action="append",
+        default=[],
+        dest="params",
+        help="supply a PARAM the file declares; repeatable",
+    )
     _add_shared_arguments(parser)
     return parser
+
+
+def build_config_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gridql config",
+        description=f"Show the {CONFIG_NAME} in effect, and the queries it points at.",
+    )
+    _add_config_arguments(parser)
+    return parser
+
+
+def show_config(explicit: str | None = None, disabled: bool = False) -> str:
+    config = project_config(explicit, not disabled)
+    lines = [config.describe()]
+    scripts = config.scripts()
+    if scripts:
+        lines.append("")
+        lines.append(f"{len(scripts)} quer{'y' if len(scripts) == 1 else 'ies'}:")
+        lines.extend(f"  {script.stem}" for script in scripts)
+    return "\n".join(lines)
+
+
+#: The options 'gridql run' defines itself, and whether each takes a value.
+#: Anything else on the command line is a parameter the file declares, which
+#: is how --feeder FDR-104 can mean what the file says without gridql having
+#: heard of a feeder.
+RUN_OPTIONS = {
+    "-f": True,
+    "--format": True,
+    "--db": True,
+    "--csv": True,
+    "--config": True,
+    "--param": True,
+    "--explain": False,
+    "--no-config": False,
+    "-h": False,
+    "--help": False,
+}
+
+
+def split_parameters(argv: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Separate a file's parameters from gridql's own arguments.
+
+    Done before argparse rather than after, because argparse cannot know that
+    an option it has never heard of takes a value -- left to itself it reads
+    ``run --feeder FDR-104 report`` as a file named FDR-104.
+    """
+    remaining: list[str] = []
+    values: dict[str, str] = {}
+
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        index += 1
+
+        if not token.startswith("--") or RUN_OPTIONS.get(token) is not None:
+            remaining.append(token)
+            # gridql's own option: its value travels with it.
+            if RUN_OPTIONS.get(token) and index < len(argv):
+                remaining.append(argv[index])
+                index += 1
+            continue
+
+        name, separator, inline = token[2:].partition("=")
+        if not name:
+            raise GridQLError(f"expected a parameter name in '{token}'")
+        if RUN_OPTIONS.get(f"--{name}") is not None:
+            remaining.append(token)
+            continue
+
+        if separator:
+            values[name] = inline
+            continue
+
+        following = argv[index] if index < len(argv) else None
+        if following is None or following.startswith("--"):
+            raise GridQLError(f"--{name} needs a value")
+        values[name] = following
+        index += 1
+
+    return remaining, values
+
+
+def parameters(supplied: list[str], options: dict[str, str]) -> dict[str, str]:
+    """Merge ``--param name=value`` entries with the parameters given as options.
+
+    Both spellings exist because a parameter named ``format`` would otherwise
+    be unreachable behind gridql's own option of that name.
+    """
+    values: dict[str, str] = {}
+
+    for entry in supplied:
+        name, separator, value = entry.partition("=")
+        if not separator or not name.strip():
+            raise GridQLError(f"--param takes NAME=VALUE, not '{entry}'")
+        values[name.strip()] = value
+
+    values.update(options)
+    return values
 
 
 def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
@@ -132,17 +255,49 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="query a directory of CSV files (or a single devices file) directly",
     )
+    _add_config_arguments(parser)
 
 
-def network_for(db: str | None = None, csv: str | None = None) -> Network:
-    """The network a command runs against: a database, CSV files, or the sample."""
+def _add_config_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        default=None,
+        help=f"use this {CONFIG_NAME} instead of searching for one",
+    )
+    parser.add_argument(
+        "--no-config",
+        action="store_true",
+        help=f"ignore any {CONFIG_NAME} found above the working directory",
+    )
+
+
+def network_for(
+    db: str | None = None, csv: str | None = None, config: Config | None = None
+) -> Network:
+    """The network a command runs against: a database, CSV files, or the sample.
+
+    The project config supplies the dataset when the command line does not,
+    which is what lets ``gridql 'FIND feeders'`` mean the utility's own data
+    inside a project directory.
+    """
     if db and csv:
         raise GridQLError("pass either --db or --csv, not both")
+    if not db and not csv and config is not None:
+        db, csv = config.db, config.csv
     if csv:
         return read_csv(csv).network
     if db:
         return load_network(db)
     return build_sample_network()
+
+
+def source_of(db: str | None, csv: str | None, config: Config | None = None) -> str:
+    """How to describe what a command is querying, for the REPL banner."""
+    if not db and not csv and config is not None and config:
+        name = f"{config.name}: " if config.name else ""
+        return f"{name}{config.dataset()}"
+    return db or csv or "sample network FDR-104"
 
 
 def explain(network: Network, result: Result, output_format: str | None) -> str:
@@ -185,9 +340,28 @@ def run_query(
 
 
 def run_script(
-    network: Network, path: str, output_format: str | None = None, explain_plan: bool = False
+    network: Network,
+    path: str,
+    output_format: str | None = None,
+    explain_plan: bool = False,
+    params: dict[str, str] | None = None,
+    defaults: dict[str, object] | None = None,
 ) -> str:
-    results = run_file(network, path)
+    """Run a .gridql file, binding its parameters before anything else.
+
+    ``defaults`` are the project config's parameters. They apply only where
+    the file declares them, so one project-wide ``feeder`` does not make
+    every unrelated query fail; ``params`` came from the command line, so an
+    unknown one is a typo worth reporting.
+    """
+    script = read_script(path)
+    values = dict(params or {})
+    named = {key.lower() for key in values}
+    for key, value in (defaults or {}).items():
+        if key.lower() not in named and script.param(key) is not None:
+            values[key] = value
+
+    results = evaluate_script(network, script, values)
     if not results:
         return f"{path} contains no statements"
     if explain_plan:
@@ -244,6 +418,7 @@ def build_export_csv_parser() -> argparse.ArgumentParser:
     parser.add_argument("path", help="directory to write into")
     parser.add_argument("--db", metavar="PATH", default=None, help="read from this database")
     parser.add_argument("--csv", metavar="PATH", default=None, help="read from these CSV files")
+    _add_config_arguments(parser)
     return parser
 
 
@@ -268,8 +443,10 @@ def import_csv(path: str, db: str | None = None, force: bool = False) -> str:
     return "\n".join(lines)
 
 
-def export_csv(path: str, db: str | None = None, csv: str | None = None) -> str:
-    network = network_for(db, csv)
+def export_csv(
+    path: str, db: str | None = None, csv: str | None = None, config: Config | None = None
+) -> str:
+    network = network_for(db, csv, config)
     written = write_csv(network, path)
     return f"wrote {', '.join(p.name for p in written)} to {path}"
 
@@ -292,6 +469,7 @@ def build_export_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--csv", metavar="PATH", default=None, help="read the network from CSV files"
     )
+    _add_config_arguments(parser)
     return parser
 
 
@@ -324,13 +502,19 @@ def build_validate_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--strict", action="store_true", help="exit non-zero on warnings as well as errors"
     )
+    _add_config_arguments(parser)
     return parser
 
 
-def run_validate(db: str | None = None, strict: bool = False, csv: str | None = None) -> int:
+def run_validate(
+    db: str | None = None,
+    strict: bool = False,
+    csv: str | None = None,
+    config: Config | None = None,
+) -> int:
     """Print a validation report. Exit non-zero when the model is unsound."""
     try:
-        report = validate(network_for(db, csv))
+        report = validate(network_for(db, csv, config))
     except GridQLError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
@@ -340,9 +524,13 @@ def run_validate(db: str | None = None, strict: bool = False, csv: str | None = 
 
 
 def export_cim(
-    path: str, query: str | None = None, db: str | None = None, csv: str | None = None
+    path: str,
+    query: str | None = None,
+    db: str | None = None,
+    csv: str | None = None,
+    config: Config | None = None,
 ) -> str:
-    network = network_for(db, csv)
+    network = network_for(db, csv, config)
     objects = None if query is None else evaluate(network, parse(query)).objects
 
     if path == "-":
@@ -377,7 +565,13 @@ def import_cim(path: str, db: str | None = None, force: bool = False) -> str:
     return "\n".join(lines)
 
 
-def repl(network: Network, output_format: str | None, source: str = "sample network FDR-104") -> int:
+def repl(
+    network: Network,
+    output_format: str | None,
+    source: str = "sample network FDR-104",
+    config: Config | None = None,
+) -> int:
+    config = config or Config()
     print(_banner(source))
     while True:
         try:
@@ -412,15 +606,30 @@ def repl(network: Network, output_format: str | None, source: str = "sample netw
         if lowered == ".license":
             print(_LICENSE_NOTICE)
             continue
+        if lowered == ".config":
+            print(config.describe())
+            continue
         if lowered == ".validate":
             print(validate(network).summary())
             continue
         if lowered.startswith(".run"):
-            parts = line.split(maxsplit=1)
-            if len(parts) != 2:
-                print("usage: .run <file.gridql>")
+            parts = line.split()
+            if len(parts) < 2:
+                print("usage: .run <file.gridql> [name=value ...]")
                 continue
-            _emit(lambda: run_script(network, parts[1].strip(), output_format))
+            file, assignments = parts[1], parts[2:]
+            if any("=" not in entry for entry in assignments):
+                print("usage: .run <file.gridql> [name=value ...]")
+                continue
+            _emit(
+                lambda: run_script(
+                    network,
+                    resolve_script(config, file),
+                    output_format,
+                    params=parameters(assignments, {}),
+                    defaults=config.params,
+                )
+            )
             continue
 
         _emit(lambda: run_query(network, line, output_format))
@@ -446,9 +655,18 @@ def main(argv: list[str] | None = None) -> int:
         args = build_init_parser().parse_args(argv[1:])
         return _emit(lambda: init_database(args.path, args.empty, args.force))
 
+    if argv and argv[0] == "config":
+        args = build_config_parser().parse_args(argv[1:])
+        return _emit(lambda: show_config(args.config, args.no_config))
+
     if argv and argv[0] == "validate":
         args = build_validate_parser().parse_args(argv[1:])
-        return run_validate(args.db, args.strict, args.csv)
+        try:
+            config = project_config(args.config, not args.no_config)
+        except GridQLError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        return run_validate(args.db, args.strict, args.csv, config)
 
     if argv and argv[0] == "import-csv":
         args = build_import_csv_parser().parse_args(argv[1:])
@@ -456,34 +674,55 @@ def main(argv: list[str] | None = None) -> int:
 
     if argv and argv[0] == "export-csv":
         args = build_export_csv_parser().parse_args(argv[1:])
-        return _emit(lambda: export_csv(args.path, args.db, args.csv))
+        return _emit(
+            lambda: export_csv(args.path, args.db, args.csv, _config(args))
+        )
 
     if argv and argv[0] == "export-cim":
         args = build_export_parser().parse_args(argv[1:])
-        return _emit(lambda: export_cim(args.path, args.query, args.db, args.csv))
+        return _emit(
+            lambda: export_cim(args.path, args.query, args.db, args.csv, _config(args))
+        )
 
     if argv and argv[0] == "import-cim":
         args = build_import_parser().parse_args(argv[1:])
         return _emit(lambda: import_cim(args.path, args.db, args.force))
 
     if argv and argv[0] == "run":
-        args = build_run_parser().parse_args(argv[1:])
-        return _emit(
-            lambda: run_script(network_for(args.db, args.csv), args.file, args.format, args.explain)
-        )
+        return _emit(lambda: _run(argv[1:]))
 
     args = build_parser().parse_args(argv)
 
-    if args.query is None:
-        try:
-            network = network_for(args.db, args.csv)
-        except GridQLError as error:
-            print(f"error: {error}", file=sys.stderr)
-            return 1
-        return repl(network, args.format, args.db or args.csv or "sample network FDR-104")
+    try:
+        config = _config(args)
+        network = network_for(args.db, args.csv, config)
+    except GridQLError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
 
-    return _emit(
-        lambda: run_query(network_for(args.db, args.csv), args.query, args.format, args.explain)
+    if args.query is None:
+        return repl(network, args.format, source_of(args.db, args.csv, config), config)
+
+    return _emit(lambda: run_query(network, args.query, args.format, args.explain))
+
+
+def _config(args: argparse.Namespace) -> Config:
+    return project_config(args.config, not args.no_config)
+
+
+def _run(argv: list[str]) -> str:
+    """'gridql run': the file's parameters, then the file and the dataset."""
+    rest, options = split_parameters(argv)
+    args = build_run_parser().parse_args(rest)
+    params = parameters(args.params, options)
+    config = _config(args)
+    return run_script(
+        network_for(args.db, args.csv, config),
+        resolve_script(config, args.file),
+        args.format,
+        args.explain,
+        params,
+        config.params,
     )
 
 

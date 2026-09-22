@@ -70,6 +70,18 @@ def convert(value: float, from_unit: str, to_unit: str) -> float:
     return value * from_factor / to_factor
 
 
+def split_quantity(text: str) -> tuple[float, str | None] | None:
+    """Split ``"0.5MVA"`` into ``(0.5, "MVA")``, or None if it is not a number.
+
+    This is how a value that arrived as text -- from a command line or a
+    config file -- is told apart from a name like ``FDR-104``.
+    """
+    match = _QUANTITY_RE.match(str(text))
+    if match is None:
+        return None
+    return float(match.group(1)), match.group(2)
+
+
 def parse_quantity(text: str | int | float, canonical: str | None = None) -> float:
     """Parse ``"13.8kV"`` (or a bare number) into a float in ``canonical`` units.
 

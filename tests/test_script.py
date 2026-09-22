@@ -12,6 +12,7 @@ from gridql.cli import main
 from gridql.errors import GridQLError, GridQLNameError
 from gridql.formats import render_script
 from gridql.lang import execute_script
+from gridql.config import CONFIG_NAME, load_config
 from gridql.script import find_scripts, read_script, run_file
 
 REPO = Path(__file__).resolve().parent.parent
@@ -167,9 +168,14 @@ class FileTests(unittest.TestCase):
         self.assertEqual(names, sorted(names))
 
     def test_every_bundled_query_runs(self):
+        # The project file beside them supplies the parameters they require,
+        # which is how they are meant to be run.
+        params = load_config(REPO / CONFIG_NAME).params
         for path in find_scripts(QUERIES):
             with self.subTest(query=path.name):
-                results = run_file(self.network, path)
+                script = read_script(path)
+                declared = {k: v for k, v in params.items() if script.param(k)}
+                results = run_file(self.network, path, declared)
                 self.assertTrue(results)
                 for result in results:
                     result.rows()

@@ -15,8 +15,8 @@ XFMR-001  Elm St Bank  transformer  FDR-104  ABC     500  13.8             0.48
 1 row
 ```
 
-This is the first milestone: the semantic model and the interpreter, with no storage layer and no
-CIM serialisation yet. Pure Python 3.11+, no dependencies.
+The semantic model and interpreter, SQLite persistence, CSV in and out, CIM import and export,
+model validation, and saved queries that take parameters. Pure Python 3.11+, no dependencies.
 
 New here? [**Getting started**](GETTING_STARTED.md) walks through installing it and what it can do.
 
@@ -28,6 +28,8 @@ python3 -m gridql.cli 'FIND reclosers'                 # one-shot query
 python3 -m gridql.cli --format json 'FIND loads'       # table (default), json or csv
 python3 -m gridql.cli --explain 'FIND devices DOWNSTREAM OF "REC-001"'
 python3 -m gridql.cli run queries/feeder_analysis.gridql   # run a saved query
+python3 -m gridql.cli run feeder_report --feeder FDR-104   # ... with a parameter
+python3 -m gridql.cli config                           # the project settings in effect
 python3 -m gridql.cli init grid.sqlite                 # create a database
 python3 -m gridql.cli --db grid.sqlite 'FIND feeders'  # query it
 python3 -m gridql.cli export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
@@ -53,6 +55,8 @@ print(render(result, 'json'))
 ## The language
 
 ```
+[ PARAM <name> [ = <value> ] ]*                       -- in a .gridql file only
+
 FIND <type>
   [ DOWNSTREAM OF <device> | UPSTREAM OF <device> | CONNECTED TO <device> | FED BY <feeder> ]*
   [ WHERE <condition> ]
@@ -63,7 +67,8 @@ FIND <type>
   [ RETURN table | json | csv | cim ]
 ```
 
-Clauses come in that order. Statements are separated by `;`.
+Clauses come in that order. Statements are separated by `;`. Any declared
+parameter can be used as `$name` wherever a value is written.
 
 Keywords are case-insensitive. `--` and `#` start a comment.
 
@@ -262,7 +267,103 @@ gridql run queries/feeder_analysis.gridql --explain
 ```
 
 These are artifacts an engineer can version-control, review, share and run in CI against different
-datasets — not disposable database queries. Four examples live in [`queries/`](queries/).
+datasets — not disposable database queries. The examples live in [`queries/`](queries/).
+
+### Parameters
+
+A query is only reusable if the circuit it asks about can change without editing it. `PARAM`
+declares what a run may vary, and `$name` stands wherever a value would:
+
+```sql
+PARAM feeder  = "FDR-104"
+PARAM min_kva = 0
+
+FIND transformers
+FED BY $feeder
+WHERE kva >= $min_kva
+SELECT mRID, name, kva
+ORDER BY kva DESC
+```
+
+```bash
+gridql run queries/feeder_report.gridql                          # the defaults
+gridql run queries/feeder_report.gridql --feeder FDR-201         # another circuit
+gridql run queries/feeder_report.gridql --min_kva 0.5MVA         # values carry units
+gridql run queries/feeder_report.gridql --param feeder=FDR-201   # the long way round
+```
+
+**Every declared parameter becomes an option of its own**, which is what makes the command read
+like the question. `--param name=value` is the way in for a name that collides with one of
+gridql's own options, such as `format`.
+
+Declarations come before the first `FIND` and apply to every statement in the file. **A parameter
+with no default is required**: running the file without it is refused, naming what is missing,
+rather than answered against whatever the file happened to say last. A `$name` that was never
+declared is a syntax error, so a typo cannot quietly return nothing.
+
+```
+$ gridql run queries/export_feeder.gridql --no-config
+error: missing required parameter of queries/export_feeder.gridql: feeder. Supply it with --feeder <value>
+```
+
+That file declares `PARAM feeder` with no default, so it cannot be run without naming a circuit.
+`--no-config` is what makes the example fail here: this repository's own project file supplies a
+`feeder`, which is the layering working as intended.
+
+**A parameter is always a value, never an attribute.** `WHERE state = $position` with
+`--position normal_state` compares against the *text* "normal_state" rather than reading the
+attribute, so binding can change what a query is about but never what it means. Values are read
+the way the language reads literals — `0.5MVA` is a quantity with a unit, `FDR-104` is a name —
+and `--explain` shows the query with its values substituted, which is the query that actually ran.
+
+Parameters work for topology targets, comparison operands, `IN` lists and `LIMIT`, which is enough
+to make an export a saved artifact:
+
+```sql
+PARAM feeder
+FIND devices FED BY $feeder RETURN cim        -- queries/export_feeder.gridql
+```
+
+```bash
+gridql run queries/export_feeder.gridql --feeder FDR-104 > FDR-104.xml
+```
+
+## Project configuration
+
+A utility's GridQL work is a repository: a dataset, a directory of saved queries, and the circuit
+those queries are usually about. `project.gridqlconfig` records it once, so commands stop
+repeating it.
+
+```toml
+name    = "Oakdale District"
+db      = "grid.sqlite"      # or: csv = "gis-export"
+queries = "queries"
+
+[params]
+feeder = "FDR-104"
+```
+
+```bash
+gridql config                    # what is in effect, and the queries it points at
+gridql 'FIND reclosers'          # runs against grid.sqlite, with no --db
+gridql run feeder_report         # a query by name, from anywhere in the tree
+```
+
+The file is TOML, found by walking up from the working directory the way git finds its own, so it
+applies to a whole tree and the same commands work from any subdirectory. Paths resolve against
+the file rather than the caller.
+
+**Everything in it is a default.** An explicit `--db`, `--csv` or `--<param>` wins; `--config PATH`
+names a different file, and `--no-config` ignores the search entirely — which is what a CI job
+wants when it points at a dataset of its own.
+
+`[params]` supplies a project's usual answers. They apply only to files that declare a `PARAM` of
+that name, so one project-wide `feeder` does not break every query with no use for it. A setting
+the file does not recognise is reported rather than ignored, since a silently dropped key looks
+exactly like a setting that does not work.
+
+This repository has [one of its own](project.gridqlconfig), pointing at `queries/` and naming no
+dataset, so its queries run against the bundled sample feeder.
 
 **Output.** Each statement renders in its own format: its `RETURN` clause, else `--format`, else a
 table. When a file has several statements, each result is preceded by a `-- n. <query>` comment so
@@ -498,6 +599,7 @@ network = document.network
 
 ```
             GridQL            gridql/lang     -- lexer, parser, AST, evaluator
+                                              and binding: $feeder -> a value
                |
       Semantic Model API      gridql/model    -- devices, feeders, substations
                |
@@ -505,6 +607,8 @@ network = document.network
                |
         SQLite storage        gridql/storage  -- schema and the NetworkLoader
          CSV in and out       gridql/ingest   -- the format utilities hand you
+
+       gridql/config.py -- project.gridqlconfig: which dataset, which queries
 
       CIM RDF/XML  <-->  gridql/cim  -- translation to and from the standard
 
@@ -542,11 +646,6 @@ Labs, LLC.
 GeoJSON output and device geometry, a JSON model format, and the editor.
 
 The `EXPORT CIM FROM feeder "FDR-104" INCLUDING ...` statement from the design is not implemented
-as its own syntax; `RETURN cim` and `export-cim --query` express the same thing through clauses
-that already exist. Parameterized queries and `project.gridqlconfig` are also still open.
-
-From the `.gridql` section of the design, still to come: parameterized queries
-(`gridql run export_feeder.gridql --feeder FDR-104`, planned as a `PARAM feeder = "FDR-104"`
-declaration with `$feeder` references), the `EXPORT CIM ... FROM ... INCLUDING ...` statement, and
-`project.gridqlconfig`. `gridql run` currently loads the bundled sample network, since there is no
-project config yet to point it at a real dataset.
+as its own syntax. [`queries/export_feeder.gridql`](queries/export_feeder.gridql) does the same
+work with clauses that already exist — a `PARAM`, `FED BY` and `RETURN cim` — which is why the
+statement has not earned a grammar of its own.

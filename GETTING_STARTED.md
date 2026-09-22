@@ -277,7 +277,53 @@ gridql run queries/feeder_analysis.gridql
 ```
 
 Files hold one or more statements separated by `;`, take `--` and `#` comments, and can name their
-own output format with `RETURN`. Four worked examples live in [`queries/`](queries/).
+own output format with `RETURN`. The worked examples live in [`queries/`](queries/).
+
+### Parameters: one file, any circuit
+
+A saved query should not have to be edited to ask about a different feeder. `PARAM` declares what
+a run can vary, and `$name` stands wherever a value would:
+
+```sql
+PARAM feeder  = "FDR-104"
+PARAM min_kva = 0
+
+FIND transformers FED BY $feeder WHERE kva >= $min_kva ORDER BY kva DESC
+```
+
+```bash
+gridql run queries/feeder_report.gridql                     # the defaults
+gridql run queries/feeder_report.gridql --feeder FDR-201    # another circuit
+gridql run queries/feeder_report.gridql --min_kva 0.5MVA    # values carry units
+```
+
+Every declared parameter becomes an option of its own. A parameter with no default is *required*,
+so a run that leaves it out is refused rather than answered against a stale value, and a `$name`
+that was never declared is a syntax error rather than an empty result.
+
+### The project file
+
+`project.gridqlconfig` says where a project's data and queries live, so commands stop repeating
+it. It is TOML, and it is found by walking up from the working directory the way git finds its
+own:
+
+```toml
+name    = "Oakdale District"
+db      = "grid.sqlite"
+queries = "queries"
+
+[params]
+feeder = "FDR-104"
+```
+
+```bash
+gridql config             # what is in effect, and the queries it points at
+gridql 'FIND reclosers'   # against grid.sqlite, with no --db
+gridql run feeder_report  # a query by name, from anywhere in the tree
+```
+
+Everything in it is a default: `--db`, `--csv` and `--<param>` win, and `--no-config` ignores it
+altogether. This repository has [one of its own](project.gridqlconfig).
 
 ### Loading your own data
 
@@ -358,6 +404,7 @@ save_network(network, "grid.sqlite")
 | `gridql/ingest/` | reading and writing CSV |
 | `gridql/cim/` | CIM import and export |
 | `gridql/validate.py` | model validation |
+| `gridql/config.py` | `project.gridqlconfig`: which dataset, which queries |
 | `gridql/data/sample.py` | the sample feeder, built through the public API |
 | `queries/` | example `.gridql` files |
 | `tests/` | the test suite |
@@ -365,10 +412,10 @@ save_network(network, "grid.sqlite")
 
 ## Not built yet
 
-An editor, GeoJSON output and device geometry, parameterized queries
-(`gridql run foo.gridql --feeder FDR-104`) and a project config file. The `EXPORT CIM` statement
-from the design notes is not its own syntax — `RETURN cim` and `export-cim --query` do the same job
-with clauses that already exist.
+An editor, GeoJSON output and device geometry, and a JSON model format. The `EXPORT CIM` statement
+from the design notes is not its own syntax — a `PARAM`, `FED BY` and `RETURN cim` do the same job
+with clauses that already exist, as [`queries/export_feeder.gridql`](queries/export_feeder.gridql)
+shows.
 
 ## Licence
 

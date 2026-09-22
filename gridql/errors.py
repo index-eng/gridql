@@ -56,5 +56,9 @@ class GridQLNameError(GridQLError):
         self.suggestions = suggestions
 
 
+class ParameterError(GridQLError):
+    """A .gridql file's parameters were not supplied with usable values."""
+
+
 class UnitError(GridQLError):
     """A unit was unknown, or compared against an incompatible dimension."""

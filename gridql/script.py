@@ -7,17 +7,24 @@ A .gridql file is a query an engineer can keep, review, version-control and
 run against different datasets, rather than something retyped each time. It
 holds one or more statements separated by semicolons, and may carry comments::
 
-    -- Large transformers on the Oakdale circuit
+    -- Large transformers on whichever circuit is being studied.
+    PARAM feeder = "FDR-104"
+    PARAM min_kva = 500
+
     FIND transformers
-    DOWNSTREAM OF "FDR-104"
-    WHERE kva >= 500
+    DOWNSTREAM OF $feeder
+    WHERE kva >= $min_kva
     SELECT name, mRID, kva
     RETURN table
+
+Parameters are what make the file worth keeping: the same query answers for
+another feeder without being edited.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Mapping
 
 from .errors import GridQLError
 from .lang import Result, Script, evaluate_script, parse_script
@@ -37,9 +44,17 @@ def read_script(path: str | Path) -> Script:
     return parse_script(source, str(path))
 
 
-def run_file(network: Network, path: str | Path) -> list[Result]:
-    """Run every statement of a .gridql file against ``network``, in order."""
-    return evaluate_script(network, read_script(path))
+def run_file(
+    network: Network,
+    path: str | Path,
+    params: Mapping[str, Any] | None = None,
+) -> list[Result]:
+    """Run every statement of a .gridql file against ``network``, in order.
+
+    ``params`` supplies the file's ``PARAM`` declarations; anything it leaves
+    out falls back to the default written in the file.
+    """
+    return evaluate_script(network, read_script(path), params)
 
 
 def find_scripts(directory: str | Path) -> list[Path]:

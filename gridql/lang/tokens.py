@@ -20,6 +20,7 @@ class TokenKind(Enum):
     COMMA = ","
     STAR = "*"
     SEMICOLON = ";"
+    PARAM = "parameter"
     EOF = "end of query"
 
 
@@ -28,6 +29,7 @@ class TokenKind(Enum):
 KEYWORDS = frozenset(
     {
         "FIND",
+        "PARAM",
         "WHERE",
         "SELECT",
         "RETURN",
@@ -80,4 +82,6 @@ class Token:
             return "end of query"
         if self.kind is TokenKind.STRING:
             return f'string "{self.value}"'
+        if self.kind is TokenKind.PARAM:
+            return f"parameter ${self.value}"
         return f"'{self.value}'"

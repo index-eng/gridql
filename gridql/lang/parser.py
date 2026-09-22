@@ -3,7 +3,8 @@
 
 """Recursive-descent parser for GridQL.
 
-    script     := statement { ";" statement } [ ";" ]
+    script     := param* statement { ";" statement } [ ";" ]
+    param      := "PARAM" IDENT [ "=" value ] [ ";" ]
     statement  := "FIND" type relation* [ "WHERE" expr ] [ "SELECT" columns ]
                   [ "GROUP" "BY" IDENT {"," IDENT} ] [ "ORDER" "BY" sortkeys ]
                   [ "LIMIT" NUMBER ] [ "RETURN" format ]
@@ -18,9 +19,16 @@
     and_expr   := unary ( "AND" unary )*
     unary      := "NOT" unary | "(" expr ")" | predicate
     predicate  := IDENT [ op operand | "IN" "(" value {"," value} ")" | "CONTAINS" value ]
+    operand    := STRING | NUMBER | IDENT | "$" IDENT
+
+A ``$name`` stands wherever a value stands -- a relation target, an operand, a
+LIMIT -- and every one of them must be declared by a PARAM at the head of the
+file, so a typo is a parse error rather than an empty result.
 """
 
 from __future__ import annotations
+
+import difflib
 
 from ..errors import GridQLSyntaxError
 from .ast import (
@@ -35,6 +43,8 @@ from .ast import (
     Node,
     Not,
     Or,
+    Param,
+    ParamRef,
     Quantity,
     Query,
     Relation,
@@ -44,7 +54,7 @@ from .ast import (
     Truthy,
 )
 from .lexer import tokenize
-from .tokens import Token, TokenKind
+from .tokens import KEYWORDS, Token, TokenKind
 
 _COMPARISONS = {">=", "<=", "!=", "<>", "==", "=", ">", "<"}
 
@@ -56,6 +66,14 @@ def parse(source: str) -> Query:
     :func:`parse_script` for a .gridql file.
     """
     script = parse_script(source)
+    if script.params:
+        first = script.params[0]
+        raise GridQLSyntaxError(
+            "PARAM declarations belong in a .gridql file run with 'gridql run'; "
+            "write the value directly in a one-off query",
+            source,
+            first.position,
+        )
     if len(script) != 1:
         raise GridQLSyntaxError(
             f"expected a single query, found {len(script)}; use parse_script() "
@@ -76,6 +94,8 @@ class _Parser:
         self.source = source
         self.tokens: list[Token] = tokenize(source)
         self.index = 0
+        #: Lowercased names of the parameters declared so far.
+        self.params_in_scope: set[str] = set()
 
     # -- token helpers --------------------------------------------------
 
@@ -105,12 +125,23 @@ class _Parser:
 
     def parse_script(self, path: str | None = None) -> Script:
         statements: list[Query] = []
+        params: list[Param] = []
 
         while True:
             while self.current.kind is TokenKind.SEMICOLON:
                 self.advance()
             if self.current.kind is TokenKind.EOF:
                 break
+            if self.current.is_keyword("PARAM"):
+                # Declarations head the file: every statement below may use
+                # them, and the parser can reject an undeclared $name.
+                if statements:
+                    raise self.error(
+                        "PARAM declarations must come before the first FIND, "
+                        "so that every statement in the file can use them"
+                    )
+                params.append(self.parse_param())
+                continue
             statements.append(self.parse_query())
             if self.current.kind is TokenKind.SEMICOLON:
                 continue
@@ -122,9 +153,83 @@ class _Parser:
             break
 
         if not statements:
+            if params:
+                raise self.error(
+                    "this file declares parameters but asks nothing; expected FIND"
+                )
             raise self.error("empty query; expected FIND")
 
-        return Script(tuple(statements), self.source, path)
+        return Script(tuple(statements), tuple(params), self.source, path)
+
+    def parse_param(self) -> Param:
+        """``PARAM feeder`` or ``PARAM feeder = "FDR-104"``.
+
+        The name may be written ``$feeder`` too, since that is how every
+        other line of the file spells it.
+        """
+        keyword = self.advance()
+
+        token = self.current
+        if token.kind not in (TokenKind.IDENT, TokenKind.PARAM):
+            raise self.error(
+                f"expected a parameter name after PARAM, found {token.describe()}"
+            )
+        if token.kind is TokenKind.IDENT and token.keyword in KEYWORDS:
+            raise self.error(
+                f"'{token.value}' is a GridQL keyword and cannot name a parameter", token
+            )
+        self.advance()
+        name = str(token.value)
+
+        if name.lower() in self.params_in_scope:
+            raise self.error(f"parameter '{name}' is declared twice", token)
+
+        default: Node | None = None
+        if self.current.kind is TokenKind.OP and self.current.value in ("=", "=="):
+            self.advance()
+            default = self.parse_default(name)
+
+        self.params_in_scope.add(name.lower())
+        return Param(name, default, keyword.position)
+
+    def parse_default(self, name: str) -> Node:
+        """A parameter default, which is always a value and never an attribute."""
+        token = self.current
+        if token.kind is TokenKind.STRING:
+            self.advance()
+            return Literal(str(token.value))
+        if token.kind is TokenKind.NUMBER:
+            self.advance()
+            return Quantity(float(token.value), token.unit)
+        if token.kind is TokenKind.IDENT:
+            self.advance()
+            if token.is_keyword("TRUE"):
+                return Literal(True)
+            if token.is_keyword("FALSE"):
+                return Literal(False)
+            # A bare word here is a value: a default cannot name an attribute,
+            # since there is no equipment in hand when it is resolved.
+            return Literal(str(token.value))
+        raise self.error(
+            f"expected a default value for '{name}', found {token.describe()}"
+        )
+
+    def parse_param_ref(self) -> ParamRef:
+        """``$feeder``, checked against the declarations above it."""
+        token = self.advance()
+        name = str(token.value)
+        if name.lower() not in self.params_in_scope:
+            known = sorted(self.params_in_scope)
+            hint = (
+                f"; this file declares {', '.join('$' + p for p in known)}"
+                if known
+                else "; declare it with PARAM at the top of the file"
+            )
+            suggestions = difflib.get_close_matches(name.lower(), known, n=2, cutoff=0.6)
+            if suggestions:
+                hint = f"; did you mean {', '.join('$' + s for s in suggestions)}?"
+            raise self.error(f"no parameter named '${name}'{hint}", token)
+        return ParamRef(name, token.position)
 
     def parse_query(self) -> Query:
         if self.current.kind is TokenKind.EOF:
@@ -165,7 +270,7 @@ class _Parser:
             self.expect_keyword("BY")
             order_by = self.parse_order_by()
 
-        limit: int | None = None
+        limit: int | ParamRef | None = None
         if self.current.is_keyword("LIMIT"):
             self.advance()
             limit = self.parse_limit()
@@ -282,8 +387,10 @@ class _Parser:
             self.advance()
         return SortKey(item, descending)
 
-    def parse_limit(self) -> int:
+    def parse_limit(self) -> int | ParamRef:
         token = self.current
+        if token.kind is TokenKind.PARAM:
+            return self.parse_param_ref()
         if token.kind is not TokenKind.NUMBER:
             raise self.error(f"expected a row count after LIMIT, found {token.describe()}")
         self.advance()
@@ -324,6 +431,8 @@ class _Parser:
             kind = "FED BY"
 
         target = self.current
+        if target.kind is TokenKind.PARAM:
+            return Relation(kind, self.parse_param_ref(), token.position)
         if target.kind not in (TokenKind.STRING, TokenKind.IDENT):
             raise self.error(
                 f"expected a device name after {kind}, found {target.describe()}"
@@ -400,6 +509,8 @@ class _Parser:
 
     def parse_operand(self) -> Node:
         token = self.current
+        if token.kind is TokenKind.PARAM:
+            return self.parse_param_ref()
         if token.kind is TokenKind.STRING:
             self.advance()
             return Literal(str(token.value))
