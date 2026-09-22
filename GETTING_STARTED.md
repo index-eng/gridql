@@ -188,6 +188,9 @@ FIND loads    WHERE NOT energized
 Operators are `=`, `!=`, `>`, `>=`, `<`, `<=`, `IN (...)` and `CONTAINS`, combined with `AND`,
 `OR`, `NOT` and parentheses. String comparison is case-insensitive.
 
+Clause order is `FIND`, topology, `WHERE`, `SELECT`, `GROUP BY`, `ORDER BY`, `LIMIT`, `RETURN`; a
+clause out of place says which one and where.
+
 ### Units that behave
 
 Write the unit or leave it off; these are the same query:
@@ -199,6 +202,30 @@ FIND transformers WHERE kva >= 0.5MVA
 ```
 
 Dimensions are enforced, so `kva >= 500kW` is an error rather than a wrong answer.
+
+### Answers that are numbers, not lists
+
+```bash
+gridql 'FIND loads DOWNSTREAM OF "REC-001" SELECT COUNT(*), SUM(kw), SUM(kvar)'
+```
+
+```
+COUNT(*)  SUM(kw)  SUM(kvar)
+--------  -------  ---------
+2         358      107
+```
+
+`COUNT`, `SUM`, `AVG`, `MIN` and `MAX` fold the match into one row. `GROUP BY` gives one row per
+group, `ORDER BY` and `LIMIT` do what you would expect:
+
+```
+FIND devices GROUP BY type
+FIND loads SELECT feeder, COUNT(*), SUM(kw) GROUP BY feeder ORDER BY SUM(kw) DESC
+FIND transformers ORDER BY kva DESC LIMIT 10
+```
+
+Together with back-feed, that answers the everyday planning question: close this tie, and can the
+neighbouring circuit carry what it picks up?
 
 ### Output you can use
 

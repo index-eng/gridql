@@ -12,7 +12,7 @@ import difflib
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from ..errors import GridQLNameError, UnitError
+from ..errors import GridQLError, GridQLNameError, UnitError
 from ..model import MISSING, GridObject, Network
 from ..model.types import attribute_universe, canonical_unit, class_for, resolve_type
 from ..units import convert
@@ -29,6 +29,7 @@ from .ast import (
     Quantity,
     Query,
     Script,
+    SelectItem,
     Truthy,
 )
 from .parser import parse, parse_script
@@ -46,6 +47,14 @@ class Result:
     type_key: str
     objects: list[GridObject]
     network: Network | None = field(default=None, repr=False, compare=False)
+    #: The projection actually used, which GROUP BY may have supplied.
+    select: tuple[SelectItem, ...] | None = None
+    #: Rows an aggregate query computed. None for a plain equipment query.
+    computed: list[dict[str, Any]] | None = None
+
+    @property
+    def is_aggregate(self) -> bool:
+        return self.computed is not None
 
     @property
     def output_format(self) -> str | None:
@@ -66,12 +75,12 @@ class Result:
         """The columns to render: the SELECT list, or the classes' own.
 
         A selected column keeps the spelling the query used, so
-        ``SELECT mRID`` produces an ``mRID`` header even though attribute
-        lookup is case-insensitive.
+        ``SELECT mRID`` produces an ``mRID`` header and ``SUM(kva)`` a
+        ``SUM(kva)`` one, even though attribute lookup is case-insensitive.
         """
-        select = self.query.select
-        if select is not None and select != ("*",):
-            return list(select)
+        select = self.select
+        if select is not None and [i.attribute for i in select] != ["*"]:
+            return [item.written for item in select]
 
         columns: list[str] = []
         for obj in self.objects:
@@ -87,6 +96,9 @@ class Result:
         the same result does, the transformer still reports its own value for
         every column it genuinely has rather than showing a hole.
         """
+        if self.computed is not None:
+            return self.computed
+
         columns = self.columns()
         rows: list[dict[str, Any]] = []
         for obj in self.objects:
@@ -129,24 +141,205 @@ def evaluate(network: Network, query: Query) -> Result:
         context = _Context(network, attribute_universe(type_key))
         objects = [obj for obj in objects if _test(query.where, obj, context)]
 
-    objects.sort(key=lambda obj: obj.mrid)
+    select = _projection(query, type_key)
 
-    if query.select is not None:
-        _check_columns(query.select, type_key)
+    if query.is_aggregate:
+        rows = _aggregate(network, query, objects, select)
+        return Result(query, query.type_name, type_key, objects, network, select, rows)
 
-    return Result(query, query.type_name, type_key, objects, network)
+    _order_objects(network, query, objects)
+    if query.limit is not None:
+        objects = objects[: query.limit]
+
+    return Result(query, query.type_name, type_key, objects, network, select)
 
 
-def _check_columns(columns: tuple[str, ...], type_key: str) -> None:
-    """Reject a SELECT naming something the type could never have."""
+# -- projection ---------------------------------------------------------
+
+
+def _projection(query: Query, type_key: str) -> tuple[SelectItem, ...] | None:
+    """The effective SELECT list, with GROUP BY's default filled in and checked."""
+    select = query.select
     known = attribute_universe(type_key)
-    for column in columns:
-        if column == "*" or column.lower() in known:
-            continue
-        raise GridQLNameError(
-            f"'{column}' is not an attribute of {type_key}",
-            tuple(difflib.get_close_matches(column.lower(), known, n=3, cutoff=0.5)),
+
+    if select is None and query.group_by is not None:
+        # "FIND devices GROUP BY feeder" means: one row per feeder, and count them.
+        select = tuple(SelectItem(column, column) for column in query.group_by) + (
+            SelectItem("COUNT(*)", "*", "count"),
         )
+
+    for column in query.group_by or ():
+        _check_attribute(column, known, type_key)
+    for key in query.order_by or ():
+        if key.item.attribute != "*":
+            _check_attribute(key.item.attribute, known, type_key)
+        if key.item.is_aggregate and not query.is_aggregate:
+            raise GridQLError(
+                f"ORDER BY {key.item.written} needs an aggregate query; "
+                "add the aggregate to SELECT or group the query"
+            )
+
+    if select is None:
+        return None
+
+    starred = [item for item in select if item.attribute == "*" and not item.is_aggregate]
+    if starred and query.is_aggregate:
+        raise GridQLError("SELECT * cannot be combined with an aggregate")
+
+    for item in select:
+        if item.attribute != "*":
+            _check_attribute(item.attribute, known, type_key)
+
+    if query.is_aggregate:
+        grouped = {column.lower() for column in query.group_by or ()}
+        for item in select:
+            if not item.is_aggregate and item.attribute.lower() not in grouped:
+                raise GridQLError(
+                    f"'{item.written}' is neither an aggregate nor grouped; "
+                    f"add it to GROUP BY or wrap it in an aggregate"
+                )
+
+    return select
+
+
+def _check_attribute(name: str, known: frozenset[str], type_key: str) -> None:
+    if name.lower() in known:
+        return
+    raise GridQLNameError(
+        f"'{name}' is not an attribute of {type_key}",
+        tuple(difflib.get_close_matches(name.lower(), known, n=3, cutoff=0.5)),
+    )
+
+
+# -- aggregation --------------------------------------------------------
+
+
+def _aggregate(
+    network: Network,
+    query: Query,
+    objects: list[GridObject],
+    select: tuple[SelectItem, ...] | None,
+) -> list[dict[str, Any]]:
+    """Fold the matched equipment into one row per group."""
+    select = select or ()
+    group_by = query.group_by or ()
+
+    if group_by:
+        groups: dict[tuple, list[GridObject]] = {}
+        for obj in objects:
+            key = tuple(_plain(network.attribute(obj, column)) for column in group_by)
+            groups.setdefault(key, []).append(obj)
+        ordered = sorted(groups.items(), key=lambda pair: _sort_key(pair[0]))
+    else:
+        # No grouping still means one row: COUNT of nothing is 0, not no answer.
+        ordered = [((), objects)]
+
+    order_items = [key.item for key in query.order_by or ()]
+
+    computed: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for key, members in ordered:
+        keyed = dict(zip((c.lower() for c in group_by), key))
+        values: dict[str, Any] = {}
+        for item in (*select, *order_items):
+            if item.written in values:
+                continue
+            values[item.written] = (
+                _apply(item, network, members)
+                if item.is_aggregate
+                else keyed.get(item.attribute.lower())
+            )
+        computed.append(({item.written: values[item.written] for item in select}, values))
+
+    _order_rows(query, computed)
+
+    rows = [row for row, _ in computed]
+    return rows if query.limit is None else rows[: query.limit]
+
+
+def _apply(item: SelectItem, network: Network, members: list[GridObject]) -> Any:
+    function = item.function
+
+    if function == "count" and item.attribute == "*":
+        return len(members)
+
+    values = [
+        value
+        for value in (network.attribute(obj, item.attribute) for obj in members)
+        if value is not MISSING and value is not None
+    ]
+
+    if function == "count":
+        return len(values)
+    if not values:
+        return None
+
+    if function in ("sum", "avg"):
+        numbers = []
+        for value in values:
+            if not _is_number(value):
+                raise GridQLError(
+                    f"{item.written}: '{value}' is not a number, so it cannot be totalled"
+                )
+            numbers.append(float(value))
+        total = sum(numbers)
+        return total if function == "sum" else total / len(numbers)
+
+    if all(_is_number(value) for value in values):
+        return min(values) if function == "min" else max(values)
+    texts = [str(value) for value in values]
+    return min(texts) if function == "min" else max(texts)
+
+
+# -- ordering -----------------------------------------------------------
+
+
+def _order_objects(network: Network, query: Query, objects: list[GridObject]) -> None:
+    objects.sort(key=lambda obj: obj.mrid)  # a stable, meaningful tie-break
+    for key in reversed(query.order_by or ()):
+        _sort_in_place(
+            objects,
+            lambda obj, k=key: network.attribute(obj, k.item.attribute),
+            key.descending,
+        )
+
+
+def _order_rows(query: Query, computed: list[tuple[dict, dict]]) -> None:
+    for key in reversed(query.order_by or ()):
+        _sort_in_place(
+            computed, lambda pair, k=key: pair[1].get(k.item.written), key.descending
+        )
+
+
+def _sort_in_place(items: list, value_of, descending: bool) -> None:
+    """Sort by a value, keeping rows that have none at the end either way.
+
+    Reversing the whole order would put them first on DESC, which makes
+    "the biggest transformers, descending" open with everything that has no
+    rating at all. They are not part of the ranking, so they follow it.
+    """
+    present, missing = [], []
+    for item in items:
+        value = value_of(item)
+        (missing if value is None or value is MISSING else present).append(item)
+    present.sort(key=lambda item: _sort_key(value_of(item)), reverse=descending)
+    items[:] = present + missing
+
+
+def _sort_key(value: Any) -> tuple:
+    """Order numbers before text before nothing, so mixed columns still sort."""
+    if isinstance(value, tuple):
+        return tuple(_sort_key(item) for item in value)
+    if value is MISSING or value is None:
+        return (2, 0.0, "")
+    if isinstance(value, bool):
+        return (0, float(value), "")
+    if _is_number(value):
+        return (0, float(value), "")
+    return (1, 0.0, str(value).casefold())
+
+
+def _plain(value: Any) -> Any:
+    return None if value is MISSING else value
 
 
 @dataclass(frozen=True)

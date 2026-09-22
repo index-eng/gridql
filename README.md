@@ -56,7 +56,10 @@ print(render(result, 'json'))
 FIND <type>
   [ DOWNSTREAM OF <device> | UPSTREAM OF <device> | CONNECTED TO <device> | FED BY <feeder> ]*
   [ WHERE <condition> ]
-  [ SELECT <column>, ... ]
+  [ SELECT <column> | <aggregate>, ... ]
+  [ GROUP BY <column>, ... ]
+  [ ORDER BY <column> [ASC|DESC], ... ]
+  [ LIMIT <n> ]
   [ RETURN table | json | csv | cim ]
 ```
 
@@ -141,6 +144,46 @@ FIND transformers SELECT name, mRID, kva, primary_voltage, secondary_voltage
 A selected attribute the object does not have comes back empty rather than being dropped, so
 `FIND devices SELECT mrid, kva` lists every device with ratings only where they exist. Selecting
 something no such type could have — `SELECT kvaa` — is an error, with a suggestion.
+
+### Aggregates, grouping and ordering
+
+Most questions about a grid end in a number, not a list. `COUNT`, `SUM`, `AVG`, `MIN` and `MAX`
+go in the `SELECT` list and fold the matched equipment into a single row:
+
+```
+FIND loads DOWNSTREAM OF "REC-001" SELECT COUNT(*), SUM(kw), SUM(kvar)
+```
+
+```
+COUNT(*)  SUM(kw)  SUM(kvar)
+--------  -------  ---------
+2         358      107
+```
+
+That is the load-transfer question: how much is below this point, and will the neighbouring
+feeder carry it once the tie is closed?
+
+`GROUP BY` gives one row per group. On its own it counts them, which is usually what you want:
+
+```
+FIND devices GROUP BY type
+FIND loads SELECT feeder, COUNT(*), SUM(kw) GROUP BY feeder ORDER BY SUM(kw) DESC
+```
+
+A column that is neither aggregated nor grouped is refused rather than silently picking one
+device's value. `COUNT(*)` counts rows; `COUNT(attr)` counts the rows that have that attribute, so
+`SELECT COUNT(*), COUNT(kva)` over a mixed set tells you how many carry a rating. An aggregate over
+nothing still answers — `COUNT` is `0`, the rest are empty.
+
+`ORDER BY` and `LIMIT` work on equipment and on grouped rows alike:
+
+```
+FIND transformers ORDER BY kva DESC LIMIT 10
+```
+
+Equipment that has no value for the sort column sorts **last in both directions**, so "biggest
+first" does not open with everything that has no rating at all. Without `ORDER BY`, results stay
+sorted by mRID.
 
 ### RETURN
 

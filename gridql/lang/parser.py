@@ -1,9 +1,13 @@
 """Recursive-descent parser for GridQL.
 
     script     := statement { ";" statement } [ ";" ]
-    statement  := "FIND" type relation* [ "WHERE" expr ]
-                  [ "SELECT" columns ] [ "RETURN" format ]
-    columns    := "*" | IDENT { "," IDENT }
+    statement  := "FIND" type relation* [ "WHERE" expr ] [ "SELECT" columns ]
+                  [ "GROUP" "BY" IDENT {"," IDENT} ] [ "ORDER" "BY" sortkeys ]
+                  [ "LIMIT" NUMBER ] [ "RETURN" format ]
+    columns    := "*" | item { "," item }
+    item       := IDENT | aggregate
+    aggregate  := ("COUNT"|"SUM"|"AVG"|"MIN"|"MAX") "(" (IDENT | "*") ")"
+    sortkeys   := item ["ASC"|"DESC"] { "," item ["ASC"|"DESC"] }
     relation   := ("DOWNSTREAM" | "UPSTREAM") "OF" target
                 | "CONNECTED" "TO" target
                 | "FED" "BY" target
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 from ..errors import GridQLSyntaxError
 from .ast import (
+    AGGREGATE_FUNCTIONS,
     OUTPUT_FORMATS,
     And,
     Compare,
@@ -31,6 +36,8 @@ from .ast import (
     Query,
     Relation,
     Script,
+    SelectItem,
+    SortKey,
     Truthy,
 )
 from .lexer import tokenize
@@ -143,6 +150,23 @@ class _Parser:
             self.advance()
             select = self.parse_columns()
 
+        group_by: tuple[str, ...] | None = None
+        if self.current.is_keyword("GROUP"):
+            self.advance()
+            self.expect_keyword("BY")
+            group_by = self.parse_group_by()
+
+        order_by: tuple[SortKey, ...] | None = None
+        if self.current.is_keyword("ORDER"):
+            self.advance()
+            self.expect_keyword("BY")
+            order_by = self.parse_order_by()
+
+        limit: int | None = None
+        if self.current.is_keyword("LIMIT"):
+            self.advance()
+            limit = self.parse_limit()
+
         return_format: str | None = None
         if self.current.is_keyword("RETURN"):
             self.advance()
@@ -152,12 +176,12 @@ class _Parser:
         # just pointing at an unexpected word.
         if self.current.is_keyword("FIND"):
             raise self.error("unexpected FIND; separate statements with ';'")
-        if self.current.is_keyword("WHERE", "SELECT", "DOWNSTREAM", "UPSTREAM",
-                                   "CONNECTED", "FED"):
+        if self.current.is_keyword("WHERE", "SELECT", "GROUP", "ORDER", "LIMIT",
+                                   "DOWNSTREAM", "UPSTREAM", "CONNECTED", "FED"):
             word = self.current.keyword
             raise self.error(
                 f"{word} must come earlier in the query; the order is "
-                "FIND, topology, WHERE, SELECT, RETURN"
+                "FIND, topology, WHERE, SELECT, GROUP BY, ORDER BY, LIMIT, RETURN"
             )
 
         return Query(
@@ -165,26 +189,105 @@ class _Parser:
             tuple(relations),
             where,
             select,
+            group_by,
+            order_by,
+            limit,
             return_format,
             self.source,
         )
 
-    def parse_columns(self) -> tuple[str, ...]:
+    def parse_columns(self) -> tuple[SelectItem, ...]:
+        if self.current.kind is TokenKind.STAR:
+            star = self.advance()
+            if self.current.kind is TokenKind.COMMA:
+                raise self.error(
+                    "SELECT * must stand alone; name the columns you want instead", star
+                )
+            return (SelectItem("*", "*"),)
+
+        columns = [self.parse_select_item()]
+        while self.current.kind is TokenKind.COMMA:
+            self.advance()
+            columns.append(self.parse_select_item())
+        return tuple(columns)
+
+    def parse_select_item(self) -> SelectItem:
+        token = self.current
+        if token.kind is not TokenKind.IDENT:
+            raise self.error(f"expected a column name, found {token.describe()}")
+        self.advance()
+        name = str(token.value)
+
+        if self.current.kind is not TokenKind.LPAREN:
+            return SelectItem(name, name)
+
+        # An attribute name followed by '(' is an aggregate call.
+        function = name.lower()
+        if function not in AGGREGATE_FUNCTIONS:
+            raise self.error(
+                f"unknown function '{name}'; expected one of "
+                f"{', '.join(f.upper() for f in AGGREGATE_FUNCTIONS)}",
+                token,
+            )
+        self.advance()
+
         if self.current.kind is TokenKind.STAR:
             self.advance()
-            return ("*",)
+            argument = "*"
+            if function != "count":
+                raise self.error(f"{name}(*) is not meaningful; {name} needs an attribute")
+        elif self.current.kind is TokenKind.IDENT:
+            argument = str(self.advance().value)
+        else:
+            raise self.error(
+                f"expected an attribute inside {name}(), found {self.current.describe()}"
+            )
 
+        if self.current.kind is not TokenKind.RPAREN:
+            raise self.error(f"expected ) to close {name}(, found {self.current.describe()}")
+        self.advance()
+
+        return SelectItem(f"{name}({argument})", argument, function)
+
+    def parse_group_by(self) -> tuple[str, ...]:
         columns: list[str] = []
         while True:
             token = self.current
             if token.kind is not TokenKind.IDENT:
-                raise self.error(f"expected a column name, found {token.describe()}")
+                raise self.error(f"expected a column to group by, found {token.describe()}")
             self.advance()
             columns.append(str(token.value))
             if self.current.kind is not TokenKind.COMMA:
                 break
             self.advance()
         return tuple(columns)
+
+    def parse_order_by(self) -> tuple[SortKey, ...]:
+        keys = [self.parse_sort_key()]
+        while self.current.kind is TokenKind.COMMA:
+            self.advance()
+            keys.append(self.parse_sort_key())
+        return tuple(keys)
+
+    def parse_sort_key(self) -> SortKey:
+        item = self.parse_select_item()
+        descending = False
+        if self.current.is_keyword("DESC"):
+            self.advance()
+            descending = True
+        elif self.current.is_keyword("ASC"):
+            self.advance()
+        return SortKey(item, descending)
+
+    def parse_limit(self) -> int:
+        token = self.current
+        if token.kind is not TokenKind.NUMBER:
+            raise self.error(f"expected a row count after LIMIT, found {token.describe()}")
+        self.advance()
+        value = float(token.value)
+        if value < 0 or value != int(value):
+            raise self.error("LIMIT takes a whole number of rows, zero or more", token)
+        return int(value)
 
     def parse_return_format(self) -> str:
         token = self.current

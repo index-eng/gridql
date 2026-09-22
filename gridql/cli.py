@@ -119,9 +119,15 @@ def explain(network: Network, result: Result, output_format: str | None) -> str:
     )
     if query.where is not None:
         lines.append(f"  filter -> {query.where.describe()}")
-    if query.select is not None:
-        lines.append(f"  project -> {', '.join(query.select)}")
-    lines.append(f"  {len(result)} matched")
+    if result.select is not None:
+        lines.append(f"  project -> {', '.join(i.written for i in result.select)}")
+    if query.group_by:
+        lines.append(f"  group by -> {', '.join(query.group_by)}")
+    if query.order_by:
+        lines.append(f"  order by -> {', '.join(k.describe() for k in query.order_by)}")
+    if query.limit is not None:
+        lines.append(f"  limit -> {query.limit}")
+    lines.append(f"  {len(result)} matched, {len(result.rows())} row(s) out")
     lines.append("")
     lines.append(render(result, output_format or query.return_format or "table"))
     return "\n".join(lines)

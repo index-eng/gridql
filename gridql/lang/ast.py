@@ -151,15 +151,61 @@ class Relation(Node):
 #: Output formats a RETURN clause may name.
 OUTPUT_FORMATS = ("table", "json", "csv", "cim")
 
+#: Aggregate functions. COUNT takes ``*`` as well as an attribute; the rest
+#: need something to add up.
+AGGREGATE_FUNCTIONS = ("count", "sum", "avg", "min", "max")
+
+
+@dataclass(frozen=True)
+class SelectItem(Node):
+    """One entry in a SELECT list: an attribute, or an aggregate of one.
+
+    ``written`` keeps the spelling the query used, so ``SUM(kva)`` heads its
+    column as ``SUM(kva)`` and ``mRID`` as ``mRID``, while lookup stays
+    case-insensitive.
+    """
+
+    written: str
+    attribute: str
+    function: str | None = None
+
+    @property
+    def is_aggregate(self) -> bool:
+        return self.function is not None
+
+    def describe(self) -> str:
+        return self.written
+
+
+@dataclass(frozen=True)
+class SortKey(Node):
+    """One entry in an ORDER BY list."""
+
+    item: SelectItem
+    descending: bool = False
+
+    def describe(self) -> str:
+        return f"{self.item.describe()}{' DESC' if self.descending else ''}"
+
 
 @dataclass(frozen=True)
 class Query(Node):
     type_name: str
     relations: tuple[Relation, ...] = ()
     where: Node | None = None
-    select: tuple[str, ...] | None = None
+    select: tuple[SelectItem, ...] | None = None
+    group_by: tuple[str, ...] | None = None
+    order_by: tuple[SortKey, ...] | None = None
+    limit: int | None = None
     return_format: str | None = None
     source: str = field(default="", compare=False)
+
+    @property
+    def is_aggregate(self) -> bool:
+        """True when the query answers with computed rows rather than equipment."""
+        if self.group_by is not None:
+            return True
+        return any(item.is_aggregate for item in self.select or ())
 
     def describe(self) -> str:
         parts = [f"FIND {self.type_name}"]
@@ -167,7 +213,13 @@ class Query(Node):
         if self.where is not None:
             parts.append(f"WHERE {self.where.describe()}")
         if self.select is not None:
-            parts.append(f"SELECT {', '.join(self.select)}")
+            parts.append(f"SELECT {', '.join(i.describe() for i in self.select)}")
+        if self.group_by is not None:
+            parts.append(f"GROUP BY {', '.join(self.group_by)}")
+        if self.order_by is not None:
+            parts.append(f"ORDER BY {', '.join(k.describe() for k in self.order_by)}")
+        if self.limit is not None:
+            parts.append(f"LIMIT {self.limit}")
         if self.return_format is not None:
             parts.append(f"RETURN {self.return_format}")
         return "\n".join(parts)

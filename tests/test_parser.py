@@ -76,10 +76,13 @@ class ParserTests(unittest.TestCase):
 
     def test_select_columns(self):
         query = parse("FIND transformers SELECT name, mRID, kva")
-        self.assertEqual(query.select, ("name", "mRID", "kva"))
+        self.assertEqual([i.written for i in query.select], ["name", "mRID", "kva"])
+        self.assertEqual([i.attribute for i in query.select], ["name", "mRID", "kva"])
+        self.assertFalse(any(i.is_aggregate for i in query.select))
 
     def test_select_star(self):
-        self.assertEqual(parse("FIND devices SELECT *").select, ("*",))
+        starred = parse("FIND devices SELECT *").select
+        self.assertEqual([i.attribute for i in starred], ["*"])
 
     def test_no_select_is_none(self):
         self.assertIsNone(parse("FIND devices").select)
@@ -102,7 +105,7 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(query.type_name, "transformers")
         self.assertEqual(len(query.relations), 1)
         self.assertIsNotNone(query.where)
-        self.assertEqual(query.select, ("name", "kva"))
+        self.assertEqual([i.written for i in query.select], ["name", "kva"])
         self.assertEqual(query.return_format, "csv")
 
     def test_clauses_out_of_order_say_so(self):

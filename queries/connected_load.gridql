@@ -1,0 +1,21 @@
+-- How much load sits below the mainline recloser?
+-- The question you ask before transferring a circuit to its neighbour.
+
+FIND loads
+DOWNSTREAM OF "REC-001"
+SELECT COUNT(*), SUM(kw), SUM(kvar)
+RETURN table;
+
+-- The same, broken out by feeder, largest first.
+FIND loads
+SELECT feeder, COUNT(*), SUM(kw)
+GROUP BY feeder
+ORDER BY SUM(kw) DESC
+RETURN table;
+
+-- What is on the system, by equipment type.
+FIND devices
+SELECT type, COUNT(*)
+GROUP BY type
+ORDER BY COUNT(*) DESC
+RETURN table
