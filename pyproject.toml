@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gridql"
+version = "0.1.0"
+description = "A query language for electric utility networks"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["electric utility", "distribution", "power systems", "CIM", "query language"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = []
+
+[project.scripts]
+gridql = "gridql.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["gridql*"]
+
+[tool.setuptools.package-data]
+gridql = ["py.typed"]

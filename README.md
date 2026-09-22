@@ -1,0 +1,163 @@
+# GridQL
+
+A domain-specific query language for electric utility data and power-system models.
+
+GridQL lets engineers query the grid with the concepts they already use — feeders, substations,
+transformers, switches, reclosers, phases, voltage levels and electrical topology — instead of
+learning a database schema.
+
+```
+$ gridql 'FIND transformers DOWNSTREAM OF "REC-001" WHERE kva >= 500'
+mrid      name         type         feeder   phases  kva  primary_voltage  secondary_voltage
+--------  -----------  -----------  -------  ------  ---  ---------------  -----------------
+XFMR-001  Elm St Bank  transformer  FDR-104  ABC     500  13.8             0.48
+
+1 row
+```
+
+This is the first milestone: the semantic model and the interpreter, with no storage layer and no
+CIM serialisation yet. Pure Python 3.11+, no dependencies.
+
+## Quickstart
+
+```bash
+python3 -m gridql.cli                                  # REPL against the sample feeder
+python3 -m gridql.cli 'FIND reclosers'                 # one-shot query
+python3 -m gridql.cli --format json 'FIND loads'       # table (default), json or csv
+python3 -m gridql.cli --explain 'FIND devices DOWNSTREAM OF "REC-001"'
+python3 -m unittest discover -s tests                  # the test suite
+```
+
+Installing the package (`pip install -e .`) puts a `gridql` command on your path that does the same
+thing.
+
+From Python:
+
+```python
+from gridql import build_sample_network, execute, render
+
+network = build_sample_network()
+result = execute(network, 'FIND switches WHERE state != normal_state')
+
+print(result.mrids)            # ['SW-002']
+print(render(result, 'json'))
+```
+
+## The language
+
+```
+FIND <type>
+  [ DOWNSTREAM OF <device> | UPSTREAM OF <device> | CONNECTED TO <device> | FED BY <feeder> ]*
+  [ WHERE <condition> ]
+```
+
+Keywords are case-insensitive. `--` and `#` start a comment.
+
+### Types
+
+`devices`, `switches`, `reclosers`, `breakers`, `fuses`, `sectionalizers`, `transformers`, `lines`,
+`loads`, `capacitors`, `feeders`, `substations`. Singular and common aliases (`xfmrs`, `caps`,
+`conductors`, `subs`, `circuits`) all work.
+
+`switches` is a supertype: it matches reclosers, breakers, fuses and ties too, the same way CIM
+specialises `Switch`. `devices` matches all conducting equipment but not the feeder and substation
+containers.
+
+### Topology
+
+| Relation | Meaning |
+| --- | --- |
+| `DOWNSTREAM OF "X"` | everything electrically below X, X excluded |
+| `UPSTREAM OF "X"` | everything between X and the feeder head, X excluded |
+| `CONNECTED TO "X"` | immediate neighbours of X |
+| `FED BY "X"` | everything X supplies, X included; for a feeder or substation, all of its devices |
+
+Traversal is **topological — it ignores switch state**, so `DOWNSTREAM OF "REC-001"` answers "what
+is physically below this recloser", which is the question being asked when planning work. Whether
+something is currently *energised* is a separate question, answered by the derived `energized`
+attribute:
+
+```
+FIND devices DOWNSTREAM OF "REC-001" WHERE NOT energized
+```
+
+Several relations may be stacked, and they intersect.
+
+### Conditions
+
+Operators are `=`, `!=`, `>`, `>=`, `<`, `<=`, `IN (...)` and `CONTAINS`, combined with `AND`, `OR`,
+`NOT` and parentheses. `NOT` binds tightest, then `AND`, then `OR`.
+
+A bare attribute is a truth test, so `WHERE energized` and `WHERE NOT energized` read naturally.
+
+**A bare word on the right-hand side is an attribute if the type has one by that name, and a value
+otherwise.** That is what makes the switching query work:
+
+```
+FIND switches WHERE state != normal_state     -- switches out of normal position
+FIND switches WHERE state = OPEN              -- OPEN is not an attribute, so it is a value
+FIND switches WHERE state = "OPEN"            -- quoting always forces the value reading
+```
+
+String comparisons are case-insensitive.
+
+### Units
+
+Numbers may carry a unit and are converted to the attribute's own unit; a bare number is assumed to
+already be in it. These are all the same query:
+
+```
+FIND transformers WHERE kva >= 500
+FIND transformers WHERE kva >= 500kVA
+FIND transformers WHERE kva >= 0.5MVA
+```
+
+Dimensions are enforced, so `kva >= 500kW` is an error rather than a wrong answer. Canonical units:
+voltages in kV, transformer ratings in kVA, load in kW/kVAr, ampacity in A, length in ft.
+
+## Building a network
+
+Networks are built through the semantic model's own API — the same API a SQLite or CIM loader will
+populate. Each `add_*` connects the new device in series behind the previous one; `after=` branches
+off an earlier device.
+
+```python
+from gridql import Network
+
+network = Network()
+network.add_substation("SUB-001", name="Oakdale", voltage="13.8kV")
+
+feeder = network.add_feeder("FDR-104", voltage="13.8kV", substation="SUB-001")
+feeder.add_breaker("BRK-001")
+feeder.add_recloser("REC-001")
+feeder.add_switch("SW-001")
+feeder.add_transformer("XFMR-001", after="REC-001", kva=500, secondary_voltage="0.48kV")
+feeder.add_load("LOAD-001", kw=310)
+```
+
+See `gridql/data/sample.py` for the full sample feeder, FDR-104.
+
+## Architecture
+
+```
+            GridQL            gridql/lang   -- lexer, parser, AST, evaluator
+               |
+      Semantic Model API      gridql/model  -- devices, feeders, substations
+               |
+         Graph Model          gridql/model/network.py -- connectivity and traversal
+               |
+       (storage goes here)    not yet built
+```
+
+The language only ever calls the semantic model's public API, and the model knows nothing about
+where its objects came from. That boundary is the point: swapping in SQLite, CIM or a GIS export
+changes the loader, not the language.
+
+Every class records the CIM class it maps to (`reclosers` → `ProtectedSwitch`, `transformers` →
+`PowerTransformer`, `loads` → `EnergyConsumer`, …), which is what CIM export will be built on.
+
+## Not built yet
+
+SQLite persistence, CIM import/export, GeoJSON output, CSV/JSON input loaders, and the editor —
+steps 4 through 6 of the design in `idea.md`. The loader seam and the CIM class annotations are in
+place so none of them require reworking the language.
