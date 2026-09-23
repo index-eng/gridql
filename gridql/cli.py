@@ -20,6 +20,7 @@ from .lang import Result, evaluate, evaluate_script, parse
 from .model import Network
 from .model.types import class_for
 from .cim import export_network, export_summary, read_cim
+from .dss import read_dss
 from .ingest import read_csv, write_csv
 from .script import read_script
 from .storage import StorageError, feeder_ids, load_network, object_counts, save_network
@@ -81,6 +82,7 @@ _EPILOG = """examples:
   gridql init grid.sqlite && gridql --db grid.sqlite 'FIND feeders'
   gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
   gridql import-cim feeder.xml --db imported.sqlite
+  gridql import-dss Master.dss --db imported.sqlite
   gridql validate --db grid.sqlite
   gridql --csv ./gis-export 'FIND transformers WHERE kva >= 500'
   gridql import-csv ./gis-export --db grid.sqlite
@@ -632,12 +634,19 @@ def build_export_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_import_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="gridql import-cim",
-        description="Read a CIM RDF/XML file, reporting what it contained.",
-    )
-    parser.add_argument("path", help="the CIM file to read")
+_IMPORTS = {
+    "import-cim": ("Read a CIM RDF/XML file, reporting what it contained.", "the CIM file to read"),
+    "import-dss": (
+        "Read an OpenDSS model, reporting what it contained.",
+        "the model's master .dss file; the files it redirects to are read with it",
+    ),
+}
+
+
+def build_import_parser(command: str = "import-cim") -> argparse.ArgumentParser:
+    description, path_help = _IMPORTS[command]
+    parser = argparse.ArgumentParser(prog=f"gridql {command}", description=description)
+    parser.add_argument("path", help=path_help)
     parser.add_argument(
         "--db", metavar="PATH", default=None, help="save the imported network to this database"
     )
@@ -720,14 +729,28 @@ def import_cim(
     skip_checks: bool = False,
     palette: Palette = PLAIN,
 ) -> str:
-    document = read_cim(path)
+    return _import(read_cim(path), db, force, skip_checks, palette)
+
+
+def import_dss(
+    path: str,
+    db: str | None = None,
+    force: bool = False,
+    skip_checks: bool = False,
+    palette: Palette = PLAIN,
+) -> str:
+    return _import(read_dss(path), db, force, skip_checks, palette)
+
+
+def _import(document, db: str | None, force: bool, skip_checks: bool, palette: Palette) -> str:
+    """Report what an import read, validate it, and save it if asked."""
     lines = [document.report.summary()]
 
     report = validate(document.network)
     if not report:
         lines.append(f"validation: {palette.paint('no problems found', 'ok')}")
     else:
-        # 'gridql validate' cannot read a CIM file, and --db may still hold
+        # 'gridql validate' cannot read these formats, and --db may still hold
         # the old data if the save is refused. Show the findings here instead.
         lines.append(f"validation: {report.counts()}")
         lines.extend(f"  {finding.format(palette)}" for finding in report.errors + report.warnings)
@@ -1019,11 +1042,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-    if argv and argv[0] == "import-cim":
-        args = build_import_parser().parse_args(argv[1:])
+    if argv and argv[0] in _IMPORTS:
+        args = build_import_parser(argv[0]).parse_args(argv[1:])
         _use_color(args.color)
+        reader = import_cim if argv[0] == "import-cim" else import_dss
         return _emit(
-            lambda: import_cim(args.path, args.db, args.force, args.skip_checks, _stdout())
+            lambda: reader(args.path, args.db, args.force, args.skip_checks, _stdout())
         )
 
     if argv and argv[0] == "run":

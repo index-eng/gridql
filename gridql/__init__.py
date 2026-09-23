@@ -20,6 +20,7 @@ offered your modified source.
 from .cim import export_network, import_network, read_cim
 from .config import Config, find_config, load_config, project_config
 from .data import build_sample_network
+from .dss import read_dss
 from .ingest import load_csv, read_csv, write_csv
 from .errors import (
     GridQLError,
@@ -78,6 +79,7 @@ __all__ = [
     "project_config",
     "read_cim",
     "read_csv",
+    "read_dss",
     "read_script",
     "render",
     "render_script",

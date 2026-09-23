@@ -36,6 +36,7 @@ python3 -m gridql.cli init grid.sqlite                 # create a database
 python3 -m gridql.cli --db grid.sqlite 'FIND feeders'  # query it
 python3 -m gridql.cli export-cim feeder.xml --query 'FIND devices FED BY "FDR-1201"'
 python3 -m gridql.cli import-cim feeder.xml
+python3 -m gridql.cli import-dss Master.dss --db grid.sqlite   # an OpenDSS model
 python3 -m unittest discover -s tests                  # the test suite
 ```
 
@@ -816,6 +817,58 @@ print(document.report.summary())
 network = document.network
 ```
 
+## OpenDSS import
+
+Most distribution planning models are OpenDSS scripts. `import-dss` reads one — the master file and
+everything it redirects to — and reports what it found, as `import-cim` does:
+
+```bash
+gridql import-dss Master.dss                    # what is in it, and whether it validates
+gridql import-dss Master.dss --db grid.sqlite   # keep it, and query it
+```
+
+```python
+from gridql import read_dss
+
+document = read_dss("IEEE8500/Master.dss")
+print(document.report.summary())
+```
+
+OpenDSS is a scripting language, so the importer runs the commands that define things — `New`,
+`Edit`, `like=`, `Redirect`, `Open`, `Close`, `Enable`, `Disable`, `Class.name.property=value` —
+and counts the rest (`Solve`, `Show`, …) as read but not acted on. It never runs a power flow.
+It understands the language as models are actually written: `~` continuations, `!`, `//` and
+`/* */` comments, values given by position, arrays in any bracket, values in reverse Polish
+(`%r=(.5 1000 /)`), `XfmrCode` and `LineCode` libraries, and Windows paths in `Redirect`.
+
+Several things GridQL treats as facts are left for an OpenDSS reader to work out, and the importer
+works them out the way a planner would:
+
+- **The feeder.** A script is one circuit: it becomes a feeder named for the circuit, headed by its
+  source, which is kept as a device whose `cim_class` is `EnergySource`. A transformer marked
+  `sub=yes` names the substation.
+- **Switches.** A switch is a `Line` with `switch=yes`. A `Relay`, `Fuse` or `Recloser` on it makes it
+  a breaker, fuse or recloser. It is normally open if an `Open` command opened it, if a `SwtControl`
+  says so, or if it is disabled — which is how some models draw their open points.
+- **Banks.** Single-phase transformers that share a `bank` — a three-phase regulator, say — are one
+  transformer, rated as their sum, as they are in CIM.
+- **Voltage.** A bus has no voltage until a power flow gives it one. Each bus's nominal voltage is
+  carried out from the source and every transformer winding, and settled on the nearest of the
+  script's `voltagebases`, as OpenDSS's `CalcVoltageBases` would.
+- **Phases** come from the bus nodes (`650.1.3` is phases A and C). A 120/240 V service is written on
+  nodes 1 and 2 like phases A and B, so buses fed from a center-tapped transformer's secondary are
+  found by walking out from it, and equipment on them is `s1s2`, as CIM names it.
+- **Lengths** are converted to feet from the line's `units`, or its linecode's. A line with no units
+  anywhere has no length, rather than a number of unknown meaning.
+
+Equipment GridQL has no class for — PV, storage, generators, reactors — is kept as plain devices
+with their OpenDSS class in `dss_class`, so the circuit stays whole. A disabled element is left out
+and counted, except a switch or capacitor, which is kept, open.
+
+The importer is tested against the IEEE 13, 123 and 8500-node feeders as OpenDSS models, and each is
+compared device by device with the same feeder read from CIM: the same equipment, joined the same
+way, with the same ratings. (`python3 tests/reference/fetch.py` downloads them.)
+
 ## Architecture
 
 ```
@@ -832,6 +885,7 @@ network = document.network
        gridql/config.py -- project.gridqlconfig: which dataset, which queries
 
       CIM RDF/XML  <-->  gridql/cim  -- translation to and from the standard
+   OpenDSS scripts  -->  gridql/dss  -- the models planners already have
 
          gridql/validate.py -- what is wrong with a model, and how badly
 ```

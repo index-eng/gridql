@@ -378,6 +378,7 @@ cannot tell where it came from, so nothing in a `.gridql` file depends on the so
 | CSV — a directory, or a single devices file | `--csv PATH` (with `--mapping FILE` for your own schema), `import-csv`, `load_csv()` | `write_csv()` |
 | SQLite — GridQL's own schema | `--db PATH`, `load_network()` | `init`, `save_network()` |
 | CIM RDF/XML | `import-cim`, `read_cim()` | `export-cim`, `RETURN cim` |
+| OpenDSS — a master `.dss` file and what it redirects to | `import-dss`, `read_dss()` | — |
 | Python objects | the `Network` builder API | — |
 
 Query *results* render as `table`, `json`, `csv` or `cim`, chosen with `--format` or a `RETURN`
@@ -598,7 +599,7 @@ Check the new data, or pass --skip-checks to replace it anyway.
 ```
 
 If the change is real — a feeder retired, say — add `--skip-checks`. The same applies to
-`import-cim`.
+`import-cim` and `import-dss`.
 
 ### CIM import and export
 
@@ -617,6 +618,18 @@ instead of dropping it silently. It has been tested against the IEEE 13, 123 and
 GridAPPS-D publishes them: it finds each feeder's source, keeps equipment it has no class for so the
 circuit stays whole, and reads phasing, tank-built transformers and capacitor ratings the way
 distribution tools write them.
+
+### OpenDSS models
+
+```bash
+gridql import-dss Master.dss --db grid.sqlite
+gridql --db grid.sqlite 'FIND transformers WHERE kva >= 1000'
+```
+
+An OpenDSS model becomes one feeder, named for its circuit and headed by its source. Switches take
+their kind from the fuse, recloser or relay on them, a regulator bank becomes one transformer, and
+each bus gets its nominal voltage from the nearest of the script's voltage bases. The importer reads
+the script without solving it, and says which commands it read but did not act on.
 
 ### Using it from Python
 
@@ -659,6 +672,7 @@ save_network(network, "grid.sqlite")
 | `gridql/storage/` | the SQLite schema and loader |
 | `gridql/ingest/` | reading and writing CSV, and mapping files |
 | `gridql/cim/` | CIM import and export |
+| `gridql/dss/` | OpenDSS import: the script language, and what a model becomes |
 | `gridql/validate.py` | model validation |
 | `gridql/config.py` | `project.gridqlconfig`: which dataset, which queries |
 | `gridql/data/sample.py` | the bundled sample feeder, used outside a project, built through the public API |
