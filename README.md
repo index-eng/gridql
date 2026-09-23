@@ -653,6 +653,17 @@ save_network(build_sample_network(), "grid.sqlite")
 network = load_network("grid.sqlite")          # the NetworkLoader
 ```
 
+**Which database a plain `gridql` reads.** Saving a database does not make it the default. A
+plain `gridql` reads the dataset `project.gridqlconfig` names, or the bundled sample network when
+none does, so after a save the import says how to query what it saved and, when a plain `gridql`
+will not, what to set:
+
+```
+saved to grid.sqlite
+query it with 'gridql --db grid.sqlite'
+note: a plain 'gridql' here still reads the bundled sample network FDR-104, because project.gridqlconfig names no dataset; set db = "grid.sqlite" in it to change that
+```
+
 **Refreshing.** A database is replaced whole, never merged: import the new export over it with
 `--force`, and equipment that is not in the new data is gone. The replacement is one transaction,
 so a save that fails leaves the old data in place.

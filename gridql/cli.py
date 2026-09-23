@@ -535,6 +535,17 @@ def import_csv(
 
     if db is not None:
         _save_import(document.network, report, db, force, skip_checks, lines)
+        lines.extend(_where_to_query(db))
+    else:
+        # Without --db this is a trial run, and a plain 'gridql' afterwards
+        # would answer from the project's own dataset instead.
+        query = f"gridql --csv {shlex.quote(path)}" + (
+            f" --mapping {shlex.quote(mapping)}" if mapping else ""
+        )
+        lines.append(
+            "not saved: pass --db PATH to keep it, or query the files in place with "
+            f"'{query} <query>'"
+        )
 
     return "\n".join(lines)
 
@@ -670,6 +681,9 @@ def import_cim(
 
     if db is not None:
         _save_import(document.network, report, db, force, skip_checks, lines)
+        lines.extend(_where_to_query(db))
+    else:
+        lines.append("not saved: pass --db PATH to keep it and query it")
 
     return "\n".join(lines)
 
@@ -725,6 +739,43 @@ def _save_import(
         )
     save_network(network, db)
     lines.append(f"saved to {db} (was {before} devices, now {len(network.devices)})")
+
+
+def _where_to_query(db: str) -> list[str]:
+    """How to query a database just saved, and whether a plain 'gridql' will.
+
+    A plain 'gridql' reads the dataset the project config names, or the
+    sample network when none does -- not the database saved last -- so a
+    save anywhere else would otherwise look as if it had done nothing.
+    """
+    command = f"query it with 'gridql --db {shlex.quote(db)}'"
+    try:
+        config = project_config()
+    except GridQLError:
+        return [command]
+
+    saved = Path(db).resolve()
+    if config.db and Path(config.db).resolve() == saved and not config.csv:
+        return [f"{CONFIG_NAME} names this database, so a plain 'gridql' here reads it"]
+
+    if config.root is None:
+        return [
+            command,
+            f"note: a plain 'gridql' reads the bundled sample network, because no "
+            f"{CONFIG_NAME} names a dataset; create one here with db = \"{db}\" to change that",
+        ]
+
+    try:
+        setting = saved.relative_to(config.root.resolve()).as_posix()
+    except ValueError:
+        setting = str(saved)
+    change = f'replace csv = ... with db = "{setting}"' if config.csv else f'set db = "{setting}"'
+    reason = "names no dataset" if not (config.db or config.csv) else "names that one"
+    return [
+        command,
+        f"note: a plain 'gridql' here still reads {config.dataset()}, because "
+        f"{config.path.name} {reason}; {change} in it to change that",
+    ]
 
 
 def refresh_risks(

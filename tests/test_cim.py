@@ -520,6 +520,8 @@ class CommandLineTests(unittest.TestCase):
         code, out, _ = self.run_cli(["import-cim", str(path)])
         self.assertEqual(code, 0)
         self.assertIn("imported 11 devices", out)
+        # Nothing was saved, and a query afterwards would not see it.
+        self.assertIn("not saved: pass --db PATH", out)
 
     def test_a_repeated_description_does_not_crash_the_command(self):
         path = self.directory / "grid.xml"
@@ -550,6 +552,7 @@ class CommandLineTests(unittest.TestCase):
         code, out, _ = self.run_cli(["import-cim", str(xml), "--db", str(database)])
         self.assertEqual(code, 0)
         self.assertIn("saved to", out)
+        self.assertNotIn("not saved", out)
 
         code, out, _ = self.run_cli(["--db", str(database), "FIND reclosers"])
         self.assertEqual(code, 0)

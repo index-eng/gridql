@@ -435,6 +435,15 @@ SERVICE_POINT.csv: unmapped columns kept as attributes: customer_count
 FDR-1201: no head recorded, inferred BKR-1201 as the only breaker on the feeder
 FDR-1202: no head recorded, inferred BKR-1202 as the only breaker on the feeder
 validation: no problems found
+not saved: pass --db PATH to keep it, or query the files in place with 'gridql --csv examples/mapped --mapping examples/mapped/mapping.toml <query>'
+```
+
+Without `--db` nothing is saved, so a plain `gridql` afterwards still answers from the sample
+feeder. Query the files in place as that last line says, or load them once and query the database:
+
+```bash
+gridql import-csv examples/mapped --mapping examples/mapped/mapping.toml --db cedar-hill.sqlite
+gridql --db cedar-hill.sqlite 'FIND loads WHERE NOT energized SELECT name, customer_count'
 ```
 
 A mapping is TOML. Each section names a `file` and says which of its columns fill which GridQL

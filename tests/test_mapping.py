@@ -368,6 +368,18 @@ class CommandLineTests(unittest.TestCase):
         self.assertIn("kept as attributes: mounting, install_year", out)
         self.assertIn("validation: no problems found", out)
 
+    def test_import_csv_without_a_database_says_how_to_use_what_it_read(self):
+        # Otherwise a plain 'gridql' next answers from the project's own data.
+        code, out, _ = self.run_cli(
+            ["import-csv", str(EXAMPLE), "--mapping", str(EXAMPLE_MAPPING), "--no-config"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn(
+            f"not saved: pass --db PATH to keep it, or query the files in place with "
+            f"'gridql --csv {EXAMPLE} --mapping {EXAMPLE_MAPPING} <query>'",
+            out,
+        )
+
     def test_a_query_against_mapped_files(self):
         code, out, _ = self.run_cli(
             ["--csv", str(EXAMPLE), "--mapping", str(EXAMPLE_MAPPING), "FIND reclosers"]
@@ -421,6 +433,41 @@ class ConfigTests(unittest.TestCase):
         (self.root / CONFIG_NAME).write_text('db = "grid.sqlite"\nmapping = "gis.toml"\n')
         network = network_for(config=load_config(self.root / CONFIG_NAME))
         self.assertEqual(len(network.devices), 11)
+
+    def import_into(self, db):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = main(["import-csv", str(EXAMPLE), "--mapping", str(EXAMPLE_MAPPING),
+                         "--db", db])
+        self.assertEqual(code, 0)
+        return out.getvalue()
+
+    def test_a_save_says_a_plain_gridql_will_not_read_it_without_a_config(self):
+        out = self.import_into("grid.sqlite")
+        self.assertIn("query it with 'gridql --db grid.sqlite'", out)
+        self.assertIn("a plain 'gridql' reads the bundled sample network", out)
+        self.assertIn('create one here with db = "grid.sqlite"', out)
+
+    def test_a_save_says_what_to_set_when_the_config_names_no_dataset(self):
+        (self.root / CONFIG_NAME).write_text('name = "p"\n')
+        (self.root / "data").mkdir()
+        out = self.import_into("data/grid.sqlite")
+        self.assertIn(
+            f"still reads the bundled sample network FDR-104, because {CONFIG_NAME} names "
+            'no dataset; set db = "data/grid.sqlite" in it',
+            out,
+        )
+
+    def test_a_save_says_to_replace_a_configured_csv(self):
+        (self.root / CONFIG_NAME).write_text(f'csv = "{EXAMPLE}"\n')
+        out = self.import_into("grid.sqlite")
+        self.assertIn('replace csv = ... with db = "grid.sqlite"', out)
+
+    def test_a_save_to_the_configured_database_needs_no_hint(self):
+        (self.root / CONFIG_NAME).write_text('db = "grid.sqlite"\n')
+        out = self.import_into("grid.sqlite")
+        self.assertIn(f"{CONFIG_NAME} names this database, so a plain 'gridql' here reads it", out)
+        self.assertNotIn("query it with", out)
 
     def test_an_explicit_mapping_with_a_database_is_refused(self):
         with self.assertRaises(GridQLError):
