@@ -7,12 +7,13 @@ transformers, switches, reclosers, phases, voltage levels and electrical topolog
 learning a database schema.
 
 ```
-$ gridql 'FIND transformers DOWNSTREAM OF "REC-001" WHERE kva >= 500'
-mrid      name         type         feeder   phases  kva  primary_voltage  secondary_voltage
---------  -----------  -----------  -------  ------  ---  ---------------  -----------------
-XFMR-001  Elm St Bank  transformer  FDR-104  ABC     500  13.8             0.48
+$ gridql 'FIND transformers DOWNSTREAM OF "REC-1201-01" WHERE kva >= 500'
+mrid      name       type         feeder    phases  kva  primary_voltage  secondary_voltage
+--------  ---------  -----------  --------  ------  ---  ---------------  -----------------
+TX-40210  Pad 40210  transformer  FDR-1201  ABC     750  12.47            0.48
+TX-40512  Pad 40512  transformer  FDR-1201  ABC     500  12.47            0.48
 
-1 row
+2 rows
 ```
 
 The semantic model and interpreter, SQLite persistence, CSV in and out, CIM import and export,
@@ -23,16 +24,16 @@ New here? [**Getting started**](GETTING_STARTED.md) walks through installing it 
 ## Quickstart
 
 ```bash
-python3 -m gridql.cli                                  # REPL against the sample feeder
+python3 -m gridql.cli                                  # REPL against the example data
 python3 -m gridql.cli 'FIND reclosers'                 # one-shot query
 python3 -m gridql.cli --format json 'FIND loads'       # table (default), json or csv
-python3 -m gridql.cli --explain 'FIND devices DOWNSTREAM OF "REC-001"'
+python3 -m gridql.cli --explain 'FIND devices DOWNSTREAM OF "REC-1201-01"'
 python3 -m gridql.cli run queries/feeder_analysis.gridql   # run a saved query
-python3 -m gridql.cli run feeder_report --feeder FDR-104   # ... with a parameter
+python3 -m gridql.cli run feeder_report --feeder FDR-1202  # ... with a parameter
 python3 -m gridql.cli config                           # the project settings in effect
 python3 -m gridql.cli init grid.sqlite                 # create a database
 python3 -m gridql.cli --db grid.sqlite 'FIND feeders'  # query it
-python3 -m gridql.cli export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
+python3 -m gridql.cli export-cim feeder.xml --query 'FIND devices FED BY "FDR-1201"'
 python3 -m gridql.cli import-cim feeder.xml
 python3 -m unittest discover -s tests                  # the test suite
 ```
@@ -99,12 +100,12 @@ followed it would have one feeder swallow the next. A device belongs to exactly 
 puts it in exactly one `EquipmentContainer`), so `DOWNSTREAM OF` and `UPSTREAM OF` stay inside that
 feeder and stop at the tie. Adjacency itself is still physical: `CONNECTED TO` reaches across it.
 
-**Traversal ignores switch state**, so `DOWNSTREAM OF "REC-001"` answers "what is physically below
+**Traversal ignores switch state**, so `DOWNSTREAM OF "REC-1201-01"` answers "what is physically below
 this recloser", which is the question being asked when planning work. Whether something is
 currently *energised* is a separate question, answered by the derived `energized` attribute:
 
 ```
-FIND devices DOWNSTREAM OF "REC-001" WHERE NOT energized
+FIND devices DOWNSTREAM OF "REC-1201-01" WHERE NOT energized
 ```
 
 Energisation is computed the other way round: it floods from *every* feeder head across the real
@@ -120,14 +121,15 @@ Several relations may be stacked, and they intersect. The first one also decides
 below: the order results come back in, and what `hops` measures.
 
 **Results come back in walking order** — nearest the target first, then outward — because that is
-the order the question implies. `UPSTREAM OF "XFMR-002"` reports the switch above it, then the
-recloser above that, and so on to the feeder head. Add `ORDER BY` to override it; without a
+the order the question implies. `UPSTREAM OF "TX-40331"` reports the line feeding it, then the
+fuse on its lateral, then the branch above that, and so on to the feeder head. Add `ORDER BY` to override it; without a
 topology relation, results stay sorted by mRID.
 
 That makes the fault-isolation question a query:
 
 ```
-FIND reclosers UPSTREAM OF "XFMR-002" LIMIT 1     -- which device operates for a fault here
+FIND switches UPSTREAM OF "TX-40331" LIMIT 1      -- the nearest device to isolate a fault here
+FIND reclosers UPSTREAM OF "TX-40331" LIMIT 1     -- and the recloser behind it
 ```
 
 ### Distance: hops and depth
@@ -137,9 +139,9 @@ its feeder head. Both are ordinary attributes, so they can be selected, filtered
 aggregated:
 
 ```
-FIND devices DOWNSTREAM OF "REC-001" SELECT mRID, type, hops
-FIND devices DOWNSTREAM OF "REC-001" WHERE hops <= 1
-FIND devices DOWNSTREAM OF "REC-001" SELECT MAX(hops), COUNT(*)
+FIND devices DOWNSTREAM OF "REC-1201-01" SELECT mRID, type, hops
+FIND devices DOWNSTREAM OF "REC-1201-01" WHERE hops <= 1
+FIND devices DOWNSTREAM OF "REC-1201-01" SELECT MAX(hops), COUNT(*)
 FIND devices WHERE depth = 0                       -- the feeder heads
 ```
 
@@ -194,13 +196,13 @@ Most questions about a grid end in a number, not a list. `COUNT`, `SUM`, `AVG`, 
 go in the `SELECT` list and fold the matched equipment into a single row:
 
 ```
-FIND loads DOWNSTREAM OF "REC-001" SELECT COUNT(*), SUM(kw), SUM(kvar)
+FIND loads DOWNSTREAM OF "REC-1201-01" SELECT COUNT(*), SUM(kw), SUM(kvar)
 ```
 
 ```
 COUNT(*)  SUM(kw)  SUM(kvar)
 --------  -------  ---------
-2         358      107
+10        905      292
 ```
 
 That is the load-transfer question: how much is below this point, and will the neighbouring
@@ -257,9 +259,9 @@ A query worth writing twice is worth keeping. A `.gridql` file holds one or more
 separated by `;`, with `--` or `#` comments:
 
 ```sql
--- Large service transformers on the Oakdale circuit.
+-- Large service transformers on Cedar Hill 1201.
 FIND transformers
-DOWNSTREAM OF "FDR-104"
+DOWNSTREAM OF "FDR-1201"
 WHERE kva >= 500
 SELECT
     name,
@@ -285,7 +287,7 @@ A query is only reusable if the circuit it asks about can change without editing
 declares what a run may vary, and `$name` stands wherever a value would:
 
 ```sql
-PARAM feeder  = "FDR-104"
+PARAM feeder  = "FDR-1201"
 PARAM min_kva = 0
 
 FIND transformers
@@ -297,9 +299,9 @@ ORDER BY kva DESC
 
 ```bash
 gridql run queries/feeder_report.gridql                          # the defaults
-gridql run queries/feeder_report.gridql --feeder FDR-201         # another circuit
+gridql run queries/feeder_report.gridql --feeder FDR-1202        # another circuit
 gridql run queries/feeder_report.gridql --min_kva 0.5MVA         # values carry units
-gridql run queries/feeder_report.gridql --param feeder=FDR-201   # the long way round
+gridql run queries/feeder_report.gridql --param feeder=FDR-1202  # the long way round
 ```
 
 **Every declared parameter becomes an option of its own**, which is what makes the command read
@@ -339,7 +341,7 @@ FIND devices FED BY $feeder RETURN cim        -- queries/export_feeder.gridql
 ```
 
 ```bash
-gridql run queries/export_feeder.gridql --feeder FDR-104 > FDR-104.xml
+gridql run queries/export_feeder.gridql --feeder FDR-1202 > FDR-1202.xml
 ```
 
 ## Project configuration
@@ -377,8 +379,9 @@ that name, so one project-wide `feeder` does not break every query with no use f
 the file does not recognise is reported rather than ignored, since a silently dropped key looks
 exactly like a setting that does not work.
 
-This repository has [one of its own](project.gridqlconfig), pointing at `queries/` and naming no
-dataset, so its queries run against the bundled sample feeder.
+This repository has [one of its own](project.gridqlconfig): it points at `queries/` and at the
+example data in [`examples/csv/`](examples/csv/), with `FDR-1201` as its usual feeder. Outside a
+project, and with no `--db` or `--csv`, GridQL uses its bundled sample feeder, `FDR-104`.
 
 **Output.** Each statement renders in its own format: its `RETURN` clause, else `--format`, else a
 table. When a file has several statements, each result is preceded by a `-- n. <query>` comment so
@@ -389,9 +392,9 @@ at once.
 From Python:
 
 ```python
-from gridql import build_sample_network, run_file
+from gridql import load_csv, run_file
 
-for result in run_file(build_sample_network(), "queries/feeder_summary.gridql"):
+for result in run_file(load_csv("examples/csv"), "queries/feeder_summary.gridql"):
     print(result.type_name, result.mrids)
 ```
 
@@ -424,7 +427,7 @@ refuses, because there is no way to tell the two apart. `validate` surfaces the 
 GridQL would otherwise have to choose:
 
 ```bash
-gridql validate                        # the bundled sample
+gridql validate                        # the project's data
 gridql validate --db grid.sqlite
 gridql validate --db grid.sqlite --strict    # also fail on warnings, for CI
 ```
@@ -643,7 +646,8 @@ gridql --db grid.sqlite 'FIND reclosers'
 gridql run queries/open_devices.gridql --db grid.sqlite
 ```
 
-With no `--db`, everything runs against the bundled sample feeder. `gridql init` refuses to
+With no `--db` or `--csv`, everything runs against the project's dataset, or the bundled sample
+feeder outside a project. `gridql init` refuses to
 overwrite an existing file unless you pass `--force`, and `--empty` creates the schema alone.
 
 ```python
@@ -717,13 +721,13 @@ GridQL is a translation layer as much as a query language. Pull out the part of 
 care about with a query, and get a standards-based CIM document back:
 
 ```bash
-gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
+gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-1201"'
 gridql export-cim - --query 'FIND transformers WHERE kva >= 500'   # to stdout
 gridql import-cim vendor-export.xml --db grid.sqlite
 ```
 
 ```
-FIND devices FED BY "FDR-104" RETURN cim
+FIND devices FED BY "FDR-1201" RETURN cim
 ```
 
 A slice brings what it needs with it: the feeder and substation that contain it, the

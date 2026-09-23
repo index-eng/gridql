@@ -7,14 +7,16 @@
 # repository. Paths resolve against this file, and everything here is a
 # default that --db, --csv and --<param> override.
 
-name    = "GridQL sample project"
+name    = "Cedar Hill example"
 queries = "queries"
 
-# No dataset is named, so queries run against the bundled sample feeder.
-# A real project points at its own:
+# The example data: two feeders out of the Cedar Hill substation. Outside a
+# project, GridQL falls back to its bundled sample feeder, FDR-104, instead.
+# A utility's own project points at its export or database:
 #
-#   db  = "grid.sqlite"
 #   csv = "gis-export"
+#   db  = "grid.sqlite"
+csv = "examples/csv"
 
 [params]
-feeder = "FDR-104"
+feeder = "FDR-1201"

@@ -1,6 +1,6 @@
 -- Carve one circuit out of the system as a CIM exchange file.
 --
---   gridql run queries/export_feeder.gridql --feeder FDR-104 > FDR-104.xml
+--   gridql run queries/export_feeder.gridql --feeder FDR-1202 > FDR-1202.xml
 --
 -- The design sketched this as EXPORT CIM FROM feeder "FDR-104" INCLUDING ...;
 -- FED BY and RETURN cim say the same thing with clauses that already exist,

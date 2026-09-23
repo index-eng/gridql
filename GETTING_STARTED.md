@@ -11,7 +11,7 @@ reclosers, phases, voltage levels, upstream and downstream — instead of learni
 happens to sit underneath.
 
 ```
-FIND transformers DOWNSTREAM OF "REC-001" WHERE kva >= 500
+FIND transformers DOWNSTREAM OF "REC-1201-01" WHERE kva >= 500
 ```
 
 The same question in SQL means knowing the table layout and writing a recursive query over a
@@ -71,25 +71,37 @@ python3 -m unittest discover -s tests
 
 ## Your first queries
 
-Every command below works immediately: GridQL ships with a small sample feeder, **FDR-104**, and
-uses it whenever nothing points it at data of your own — no `--db`, no `--csv`, and no project
-file naming a dataset.
+Every command below works immediately from this directory. The repository's
+[project file](project.gridqlconfig) points at the example data in [`examples/csv/`](examples/csv/):
+two 12.47 kV feeders out of the Cedar Hill substation, 77 devices in all. Here is the larger one,
+with the line sections between devices left out:
 
 ```
-Substation SUB-001 "Oakdale"  ·  Feeder FDR-104 @ 13.8 kV
-─────────────────────────────────────────────────────────
-   BRK-001  (feeder head)
-      │
-   LN-001
-      │
-   REC-001 ──────────────┬──────────────────┐
-      │                  │                  │
-   SW-001            XFMR-001            SW-002  (open — crew working)
-      │                  │                  │
-   LN-002            LOAD-001            XFMR-002
-      │                                     │
-   TIE-001 (normally open tie)           LOAD-002
+Substation SUB-12 "Cedar Hill"  ·  Feeder FDR-1201 @ 12.47 kV
+──────────────────────────────────────────────────────────────────────
+BKR-1201  feeder breaker (the feeder head)
+  │
+  ├─ FU-1201-01 ── Maple Ave lateral, A phase
+  ├─ CAP-1201-01   300 kVAR capacitor bank
+  │
+REC-1201-01  mid-line recloser
+  │
+  ├─ FU-1201-02 ── Cedar Hill Plaza, underground: 750 and 300 kVA pad-mounts
+  │
+SW-1201-01  sectionalizing switch
+  │
+  ├─ SEC-1201-01 ── Ridge Rd branch
+  │                   ├─ FU-1201-03 ── Birchwood Ct, B phase
+  │                   ├─ FU-1201-04 ── Quarry Ln, C phase      <- blown
+  │                   └─ TX-40340   ── Ridge Rd Farm Supply
+  ├─ FU-1201-05 ── Oak St lateral, C phase
+  ├─ FU-1201-06 ── Cedar Hill Elementary, 500 kVA pad-mount
+  │
+TIE-1201-1202  normally open tie to the end of FDR-1202
 ```
+
+FDR-1202 is a shorter neighbour with its own recloser. Outside a project, with no `--db` or
+`--csv`, GridQL uses a smaller bundled sample feeder, `FDR-104`, instead.
 
 Start with the simplest thing:
 
@@ -98,11 +110,12 @@ gridql 'FIND reclosers'
 ```
 
 ```
-mrid     name               type      feeder   phases  voltage  state   normal_state
--------  -----------------  --------  -------  ------  -------  ------  ------------
-REC-001  Mainline Recloser  recloser  FDR-104  ABC     13.8     CLOSED  CLOSED
+mrid         name              type      feeder    phases  voltage  state   normal_state
+-----------  ----------------  --------  --------  ------  -------  ------  ------------
+REC-1201-01  Midline Recloser  recloser  FDR-1201  ABC     12.47    CLOSED  CLOSED
+REC-1202-01  Midline Recloser  recloser  FDR-1202  ABC     12.47    CLOSED  CLOSED
 
-1 row
+2 rows
 ```
 
 Then filter:
@@ -114,7 +127,7 @@ gridql 'FIND transformers WHERE kva >= 500'
 Then ask a question about topology — the reason the language exists:
 
 ```bash
-gridql 'FIND devices DOWNSTREAM OF "REC-001"'
+gridql 'FIND devices DOWNSTREAM OF "SEC-1201-01"'
 ```
 
 Or start the interactive prompt and poke around:
@@ -126,13 +139,13 @@ gridql
 ```
 GridQL 0.1.0  Copyright (C) 2026 Index Labs, LLC
 Free software under AGPL-3.0-or-later, with NO WARRANTY; type '.license' for details.
-Loaded: GridQL sample project: the bundled sample network FDR-104.
+Loaded: Cedar Hill example: examples/csv (CSV).
 Type a query, '.help' for help, or '.quit' to exit.
 gridql>
 ```
 
 The `Loaded:` line names whatever is in effect — here, this repository's own project file and the
-sample feeder it falls back to.
+example data it points at.
 
 `.help` lists the syntax, `.types` lists every type and the CIM class it maps to, `.config` shows
 the project settings in effect, `.run <file> [name=value ...]` runs a saved query, `.validate`
@@ -160,25 +173,29 @@ because that is what an engineer means by it, and what CIM says.
 
 ### Physical versus energized — the distinction that matters
 
-Traversal **ignores switch state**. `DOWNSTREAM OF "REC-001"` tells you what is *physically* below
-that recloser, which is the question you are asking when planning work. Whether it is *currently
-energized* is a separate question, and a separate attribute:
+Traversal **ignores switch state**. `DOWNSTREAM OF "SEC-1201-01"` tells you what is *physically*
+below that sectionalizer, which is the question you are asking when planning work. Whether it is
+*currently energized* is a separate question, and a separate attribute:
 
 ```bash
-gridql 'FIND devices DOWNSTREAM OF "REC-001" WHERE NOT energized SELECT mRID, name, type'
+gridql 'FIND devices DOWNSTREAM OF "SEC-1201-01" WHERE NOT energized SELECT mRID, name, type'
 ```
 
 ```
-mRID      name                  type
---------  --------------------  -----------
-XFMR-002  Maple Ln Bank         transformer
-LOAD-002  Maple Ln Residential  load
+mRID        name             type
+----------  ---------------  -----------
+OH-1201-24  OH-1201-24       line
+OH-1201-25  OH-1201-25       line
+TX-40331    Pole 40331       transformer
+SP-40331    Quarry Ln 3-9    load
+TX-40335    Pole 40335       transformer
+SP-40335    Quarry Ln 11-19  load
 
-2 rows
+6 rows
 ```
 
-Those two are dark because SW-002 is open. They are still downstream of the recloser, and GridQL
-keeps the two facts apart rather than quietly conflating them.
+Those six are dark because fuse FU-1201-04 has blown. They are still downstream of the
+sectionalizer, and GridQL keeps the two facts apart rather than quietly conflating them.
 
 The two questions are answered differently on purpose. A feeder's tree covers that feeder's own
 equipment and stops at a tie, so one circuit never swallows its neighbour. Energisation ignores
@@ -191,15 +208,16 @@ Topology results come back in walking order — nearest the target first — so 
 fault-isolation question is just a query:
 
 ```bash
-gridql 'FIND reclosers UPSTREAM OF "XFMR-002" LIMIT 1'   # which device operates for a fault here
+gridql 'FIND switches UPSTREAM OF "TX-40331" LIMIT 1'    # the nearest device: FU-1201-04
+gridql 'FIND reclosers UPSTREAM OF "TX-40331" LIMIT 1'   # the recloser behind it: REC-1201-01
 ```
 
 `hops` (distance from the query's target) and `depth` (distance from the feeder head) are ordinary
 attributes you can select, filter, sort and total:
 
 ```
-FIND devices DOWNSTREAM OF "REC-001" SELECT mRID, type, hops
-FIND devices DOWNSTREAM OF "REC-001" WHERE hops <= 1
+FIND devices DOWNSTREAM OF "REC-1201-01" SELECT mRID, type, hops
+FIND devices DOWNSTREAM OF "REC-1201-01" WHERE hops <= 1
 ```
 
 ### Filters that read like the question
@@ -232,13 +250,13 @@ Dimensions are enforced, so `kva >= 500kW` is an error rather than a wrong answe
 ### Answers that are numbers, not lists
 
 ```bash
-gridql 'FIND loads DOWNSTREAM OF "REC-001" SELECT COUNT(*), SUM(kw), SUM(kvar)'
+gridql 'FIND loads DOWNSTREAM OF "REC-1201-01" SELECT COUNT(*), SUM(kw), SUM(kvar)'
 ```
 
 ```
 COUNT(*)  SUM(kw)  SUM(kvar)
 --------  -------  ---------
-2         358      107
+10        905      292
 
 1 row
 ```
@@ -273,7 +291,8 @@ Real models arrive with problems. `validate` names them instead of letting a que
 a plausible wrong answer:
 
 ```bash
-gridql validate --db grid.sqlite
+gridql validate                     # the project's data
+gridql validate --db grid.sqlite    # or any other
 ```
 
 **Errors** mean answers will be wrong — a feeder pointing at a substation that does not exist, a
@@ -300,7 +319,7 @@ A saved query should not have to be edited to ask about a different feeder. `PAR
 a run can vary, and `$name` stands wherever a value would:
 
 ```sql
-PARAM feeder  = "FDR-104"
+PARAM feeder  = "FDR-1201"
 PARAM min_kva = 0
 
 FIND transformers FED BY $feeder WHERE kva >= $min_kva ORDER BY kva DESC
@@ -308,7 +327,7 @@ FIND transformers FED BY $feeder WHERE kva >= $min_kva ORDER BY kva DESC
 
 ```bash
 gridql run queries/feeder_report.gridql                     # the defaults
-gridql run queries/feeder_report.gridql --feeder FDR-201    # another circuit
+gridql run queries/feeder_report.gridql --feeder FDR-1202   # another circuit
 gridql run queries/feeder_report.gridql --min_kva 0.5MVA    # values carry units
 ```
 
@@ -342,7 +361,8 @@ gridql run feeder_report  # a query by name, from anywhere in the tree
 ```
 
 Everything in it is a default: `--db`, `--csv`, `--mapping` and `--<param>` win, and `--no-config`
-ignores it altogether. This repository has [one of its own](project.gridqlconfig).
+ignores it altogether. This repository has [one of its own](project.gridqlconfig), naming
+`examples/csv` as its data and `FDR-1201` as its usual feeder.
 
 ### Data formats
 
@@ -438,8 +458,9 @@ validation: no problems found
 not saved: pass --db PATH to keep it, or query the files in place with 'gridql --csv examples/mapped --mapping examples/mapped/mapping.toml <query>'
 ```
 
-Without `--db` nothing is saved, so a plain `gridql` afterwards still answers from the sample
-feeder. Query the files in place as that last line says, or load them once and query the database:
+Without `--db` nothing is saved: a plain `gridql` answers from whatever the project file names —
+in this repository `examples/csv`, which happens to hold the same network. Query the files in place
+as that last line says, or load them once and query the database:
 
 ```bash
 gridql import-csv examples/mapped --mapping examples/mapped/mapping.toml --db cedar-hill.sqlite
@@ -578,7 +599,7 @@ If the change is real — a feeder retired, say — add `--skip-checks`. The sam
 ### CIM import and export
 
 ```bash
-gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-104"'
+gridql export-cim feeder.xml --query 'FIND devices FED BY "FDR-1201"'
 gridql import-cim vendor-export.xml --db grid.sqlite
 ```
 
@@ -591,6 +612,8 @@ The importer reads CIM from other tools, understands the specialisations they em
 instead of dropping it silently.
 
 ### Using it from Python
+
+The bundled sample feeder is always there to experiment with:
 
 ```python
 from gridql import build_sample_network, execute, render
@@ -631,8 +654,8 @@ save_network(network, "grid.sqlite")
 | `gridql/cim/` | CIM import and export |
 | `gridql/validate.py` | model validation |
 | `gridql/config.py` | `project.gridqlconfig`: which dataset, which queries |
-| `gridql/data/sample.py` | the sample feeder, built through the public API |
-| `queries/` | example `.gridql` files |
+| `gridql/data/sample.py` | the bundled sample feeder, used outside a project, built through the public API |
+| `queries/` | example `.gridql` files, written for the example data |
 | `examples/` | two realistic feeders as CSV: `csv/` in GridQL's own layout, `mapped/` as a GIS might export it |
 | `project.gridqlconfig` | this repository's own project file |
 | `tests/` | the test suite |

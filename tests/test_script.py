@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gridql import build_sample_network, execute, render
+from gridql import build_sample_network, execute, read_csv, render
 from gridql.cli import main
 from gridql.errors import GridQLError, GridQLNameError
 from gridql.formats import render_script
@@ -27,6 +27,8 @@ def setUpModule():
 
 REPO = Path(__file__).resolve().parent.parent
 QUERIES = REPO / "queries"
+#: The bundled queries are this repository's project's, written for its data.
+PROJECT = REPO / CONFIG_NAME
 
 
 class SelectTests(unittest.TestCase):
@@ -208,21 +210,30 @@ class FileTests(unittest.TestCase):
         self.assertEqual(names, sorted(names))
 
     def test_every_bundled_query_runs(self):
-        # A project file supplies the parameters they require, which is how
-        # they are meant to be run: here, the sample project's.
-        params = load_config(Path.cwd() / CONFIG_NAME).params
+        # Against the project's data, with the parameters its file supplies,
+        # which is how they are meant to be run.
+        config = load_config(PROJECT)
+        network = read_csv(config.csv).network
         for path in find_scripts(QUERIES):
             with self.subTest(query=path.name):
                 script = read_script(path)
-                declared = {k: v for k, v in params.items() if script.param(k)}
-                results = run_file(self.network, path, declared)
+                declared = {k: v for k, v in config.params.items() if script.param(k)}
+                results = run_file(network, path, declared)
                 self.assertTrue(results)
                 for result in results:
                     result.rows()
 
+    def test_the_repository_project_uses_data_the_repository_ships(self):
+        # A fresh clone has no database, so the project must name files it tracks.
+        config = load_config(PROJECT)
+        self.assertIsNone(config.db)
+        network = read_csv(config.csv).network
+        self.assertIn(config.params["feeder"], network)
+
     def test_the_bundled_analysis_query_matches_the_doc(self):
-        results = run_file(self.network, QUERIES / "feeder_analysis.gridql")
-        self.assertEqual(results[0].mrids, ["XFMR-001"])
+        network = read_csv(load_config(PROJECT).csv).network
+        results = run_file(network, QUERIES / "feeder_analysis.gridql")
+        self.assertEqual(results[0].mrids, ["TX-40210", "TX-40512"])
         self.assertEqual(
             results[0].columns(),
             ["name", "mRID", "kva", "primary_voltage", "secondary_voltage"],
@@ -236,29 +247,28 @@ class RunCommandTests(unittest.TestCase):
             code = main(argv)
         return code, out.getvalue(), err.getvalue()
 
+    def run_bundled(self, name, *options):
+        return self.run_cli(["run", str(QUERIES / name), "--config", str(PROJECT), *options])
+
     def test_run_a_bundled_query(self):
-        code, out, _ = self.run_cli(["run", str(QUERIES / "feeder_analysis.gridql")])
+        code, out, _ = self.run_bundled("feeder_analysis.gridql")
         self.assertEqual(code, 0)
-        self.assertIn("XFMR-001", out)
+        self.assertIn("TX-40210", out)
         self.assertIn("mRID", out)
 
     def test_run_a_multi_statement_query(self):
-        code, out, _ = self.run_cli(["run", str(QUERIES / "feeder_summary.gridql")])
+        code, out, _ = self.run_bundled("feeder_summary.gridql")
         self.assertEqual(code, 0)
         self.assertIn("-- 1.", out)
         self.assertIn("-- 3.", out)
 
     def test_run_with_a_format_override(self):
-        code, out, _ = self.run_cli(
-            ["run", str(QUERIES / "feeder_summary.gridql"), "--format", "json"]
-        )
+        code, out, _ = self.run_bundled("feeder_summary.gridql", "--format", "json")
         self.assertEqual(code, 0)
         self.assertEqual(len(json.loads(out)), 3)
 
     def test_run_explain(self):
-        code, out, _ = self.run_cli(
-            ["run", str(QUERIES / "feeder_analysis.gridql"), "--explain"]
-        )
+        code, out, _ = self.run_bundled("feeder_analysis.gridql", "--explain")
         self.assertEqual(code, 0)
         self.assertIn("plan:", out)
         self.assertIn("project -> name, mRID", out)

@@ -1,8 +1,8 @@
--- Large service transformers on the Oakdale circuit.
+-- Large service transformers on Cedar Hill 1201.
 -- From the design doc's .gridql example.
 
 FIND transformers
-DOWNSTREAM OF "FDR-104"
+DOWNSTREAM OF "FDR-1201"
 WHERE kva >= 500
 SELECT
     name,

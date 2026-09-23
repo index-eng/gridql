@@ -1,12 +1,12 @@
 -- A circuit walk-down that works on any feeder.
 --
 --   gridql run queries/feeder_report.gridql
---   gridql run queries/feeder_report.gridql --feeder FDR-201 --min_kva 0.5MVA
+--   gridql run queries/feeder_report.gridql --feeder FDR-1202 --min_kva 0.5MVA
 --
 -- The defaults make the file runnable as it stands; a project.gridqlconfig
 -- can set its own, and the command line beats both.
 
-PARAM feeder  = "FDR-104"
+PARAM feeder  = "FDR-1201"
 PARAM min_kva = 0
 PARAM worst   = 5
 

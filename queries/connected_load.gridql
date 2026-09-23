@@ -1,8 +1,8 @@
--- How much load sits below the mainline recloser?
+-- How much load sits below the mid-line recloser on Cedar Hill 1201?
 -- The question you ask before transferring a circuit to its neighbour.
 
 FIND loads
-DOWNSTREAM OF "REC-001"
+DOWNSTREAM OF "REC-1201-01"
 SELECT COUNT(*), SUM(kw), SUM(kvar)
 RETURN table;
 

@@ -1,4 +1,4 @@
--- A three-part walk-down of the Oakdale circuit.
+-- A three-part walk-down of Cedar Hill 1201.
 -- Statements run in order, each producing its own result.
 
 FIND feeders
@@ -6,13 +6,13 @@ SELECT mRID, name, substation, voltage
 RETURN table;
 
 FIND switches
-FED BY "FDR-104"
+FED BY "FDR-1201"
 SELECT mRID, name, state, normal_state, energized
 RETURN table;
 
--- Anything the open lateral has left de-energised.
+-- Anything the blown lateral fuse has left de-energised.
 FIND devices
-FED BY "FDR-104"
+FED BY "FDR-1201"
 WHERE NOT energized
 SELECT mRID, name, type, feeder
 RETURN table
