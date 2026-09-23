@@ -164,7 +164,7 @@ FIND switches WHERE state = "OPEN"            -- quoting always forces the value
 
 String comparisons are case-insensitive. An attribute the type cannot have is an error, not an
 empty answer, so `WHERE kvaa >= 500` asks whether you meant `kva`. Equipment that simply lacks a
-value — a load has no `kva` — does not match.
+value does not match: `FIND devices WHERE kva >= 500` passes over the loads, which have none.
 
 ### SELECT
 
@@ -344,6 +344,7 @@ repeating it.
 name    = "Oakdale District"
 db      = "grid.sqlite"      # or: csv = "gis-export"
 queries = "queries"
+# mapping = "gis-export.toml"   what the CSV columns mean; see "Mapping a utility's own schema"
 
 [params]
 feeder = "FDR-104"
@@ -359,7 +360,7 @@ The file is TOML, found by walking up from the working directory the way git fin
 applies to a whole tree and the same commands work from any subdirectory. Paths resolve against
 the file rather than the caller.
 
-**Everything in it is a default.** An explicit `--db`, `--csv` or `--<param>` wins; `--config PATH`
+**Everything in it is a default.** An explicit `--db`, `--csv`, `--mapping` or `--<param>` wins; `--config PATH`
 names a different file, and `--no-config` ignores the search entirely — which is what a CI job
 wants when it points at a dataset of its own.
 
@@ -507,6 +508,71 @@ Feeders and substations are created from whatever the devices refer to, and a fe
 exactly one breaker gets it as the head — with anything less clear reported rather than guessed,
 the same rule CIM import uses.
 
+### Mapping a utility's own schema
+
+Guessing from headers only goes so far. One utility calls a circuit `FEEDER_ID`, the next
+`CIRCUIT_NO`; one keeps every device in a single table, another has a file per equipment type;
+switch positions arrive as `O` and `C`, voltages in volts. A **mapping file** says exactly what
+the utility's files and columns mean, and the queries stay the same whoever's data is underneath:
+
+```toml
+[feeders]
+file       = "CIRCUIT.csv"
+mrid       = "FDR-{CIRCUIT_NO}"                     # a template: an ID built from columns
+name       = "CIRCUIT_DESC"                         # a column
+substation = "SUB-{STATION_NO}"
+voltage    = { column = "NOM_VOLTS", unit = "V" }   # bare cells are in volts
+
+[[devices]]
+file   = "SWITCH.csv"
+mrid   = "FACILITY_ID"
+feeder = "FDR-{CIRCUIT_NO}"
+type   = { column = "SW_TYPE", values = { BKR = "breaker", RCL = "recloser", LBS = "switch" } }
+state  = { column = "POSITION", values = { O = "OPEN", C = "CLOSED" } }
+
+[[devices]]
+file = "TRANSFORMER.csv"
+type = { value = "transformer" }                    # a constant: the whole file is one type
+mrid = "FACILITY_ID"
+kva  = "KVA_RATING"
+
+[connections]
+file        = "CONNECTIVITY.csv"
+from_device = "FROM_FACILITY"
+to_device   = "TO_FACILITY"
+```
+
+```bash
+gridql import-csv ./gis-export --mapping gis-export.toml        # try it: the report says what it made
+gridql --csv ./gis-export --mapping gis-export.toml 'FIND reclosers'
+```
+
+A field is a column, a `{COLUMN}` template, or a table naming a `column`, `template` or `value`,
+with an optional `unit` the cells are written in, a `values` table translating the utility's
+codes and a `default` for empty cells. Sections are `substations`, `feeders`, `devices` (as many
+as there are files) and `connections`; file names are relative to the `--csv` directory.
+
+**With a mapping nothing is guessed.** A column the mapping does not name is kept as an attribute
+— `INSTALL_YEAR` becomes `install_year` — but never read as a field, so a utility's `STATUS`
+column cannot be mistaken for a switch position. `extras = false` keeps none, and a list keeps
+just those. A column that would be hidden behind one of GridQL's own attributes is reported instead
+of kept.
+
+**Mistakes are reported, not guessed around.** A field GridQL does not have, a column the file does
+not have, or a unit that does not fit is refused with a suggestion, naming the mapping file. The
+import report counts every code a `values` table did not translate, so an unexpected position or
+type turns up the first time the mapping is tried:
+
+```
+SWITCH.csv: SW_TYPE value 'SECT' has no translation for type (4 rows); used as written
+SWITCH.csv: unmapped columns kept as attributes: install_year, mfr
+```
+
+A project names its mapping with `mapping = "gis-export.toml"` in `project.gridqlconfig`. It
+describes the utility's export format rather than one directory of it, so it applies to any CSV
+read in the project. [`examples/mapped/`](examples/mapped/) is the sample feeder as a GIS might
+export it, with the mapping that reads it back to exactly the same network.
+
 ## Persistence
 
 A network can be stored in SQLite and loaded back identically — same objects, same connectivity,
@@ -650,7 +716,9 @@ Labs, LLC.
 
 ## Not built yet
 
-GeoJSON output and device geometry, a JSON model format, and the editor.
+GeoJSON output and device geometry, a JSON model format, connectivity recorded as nodes
+(`FROM_NODE`/`TO_NODE` on each device) rather than device pairs, reading straight from a database
+such as Postgres, and the editor.
 
 The `EXPORT CIM FROM feeder "FDR-104" INCLUDING ...` statement from the design is not implemented
 as its own syntax. [`queries/export_feeder.gridql`](queries/export_feeder.gridql) does the same

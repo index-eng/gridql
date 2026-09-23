@@ -13,6 +13,7 @@ finds its own::
 
     name    = "Oakdale District"
     db      = "grid.sqlite"      # or: csv = "gis-export"
+    mapping = "mapping.toml"     # what the CSV files' columns mean
     queries = "queries"
 
     [params]
@@ -38,7 +39,7 @@ CONFIG_NAME = "project.gridqlconfig"
 
 #: Keys the file may set. Anything else is a mistake worth reporting, since
 #: a silently ignored key looks exactly like a setting that does not work.
-KEYS = ("name", "db", "csv", "queries", "params")
+KEYS = ("name", "db", "csv", "mapping", "queries", "params")
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,9 @@ class Config:
     csv: str | None = None
     queries: str | None = None
     params: dict[str, Any] = field(default_factory=dict)
+    #: How the project's CSV files map onto the model. It describes the
+    #: utility's export format, so it applies to any CSV read in the project.
+    mapping: str | None = None
 
     def __bool__(self) -> bool:
         return self.path is not None
@@ -76,6 +80,8 @@ class Config:
         if self.name:
             lines.append(f"project: {self.name}")
         lines.append(f"data:    {self.dataset()}")
+        if self.mapping:
+            lines.append(f"mapping: {_readable(self.mapping)}")
         if self.queries:
             lines.append(f"queries: {_readable(self.queries)}")
         for key, value in sorted(self.params.items()):
@@ -147,7 +153,9 @@ def load_config(path: str | Path) -> Config:
     if name is not None and not isinstance(name, str):
         raise GridQLError(f"{path}: name must be a string")
 
-    return Config(path, name, _path("db"), _path("csv"), _path("queries"), dict(params))
+    return Config(
+        path, name, _path("db"), _path("csv"), _path("queries"), dict(params), _path("mapping")
+    )
 
 
 def project_config(

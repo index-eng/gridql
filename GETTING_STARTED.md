@@ -327,14 +327,38 @@ queries = "queries"
 feeder = "FDR-104"
 ```
 
+A project that reads CSV sets `csv = "gis-export"` instead of `db`, and can add
+`mapping = "gis-export.toml"` to say what the export's columns mean — see
+[Mapping your utility's columns](#mapping-your-utilitys-columns).
+
 ```bash
 gridql config             # what is in effect, and the queries it points at
 gridql 'FIND reclosers'   # against grid.sqlite, with no --db
 gridql run feeder_report  # a query by name, from anywhere in the tree
 ```
 
-Everything in it is a default: `--db`, `--csv` and `--<param>` win, and `--no-config` ignores it
-altogether. This repository has [one of its own](project.gridqlconfig).
+Everything in it is a default: `--db`, `--csv`, `--mapping` and `--<param>` win, and `--no-config`
+ignores it altogether. This repository has [one of its own](project.gridqlconfig).
+
+### Data formats
+
+Every format below is read into the same in-memory `Network`. Once it is loaded the language
+cannot tell where it came from, so nothing in a `.gridql` file depends on the source.
+
+| Format | Read | Write |
+| --- | --- | --- |
+| CSV — a directory, or a single devices file | `--csv PATH` (with `--mapping FILE` for your own schema), `import-csv`, `load_csv()` | `write_csv()` |
+| SQLite — GridQL's own schema | `--db PATH`, `load_network()` | `init`, `save_network()` |
+| CIM RDF/XML | `import-cim`, `read_cim()` | `export-cim`, `RETURN cim` |
+| Python objects | the `Network` builder API | — |
+
+Query *results* render as `table`, `json`, `csv` or `cim`, chosen with `--format` or a `RETURN`
+clause. That is a separate question from the input format: you can read CSV and return CIM.
+
+A SQLite file must be one GridQL wrote — the loader checks a schema version and refuses anything
+else rather than guessing. There is no connection to an external database: reading from Oracle,
+Postgres or a GIS server means exporting to CSV first, which is what the CSV reader is for — and a
+mapping file means the export can keep the source system's own table and column names.
 
 ### Loading your own data
 
@@ -348,6 +372,145 @@ A `devices.csv` is all that is strictly required; `connections.csv`, `feeders.cs
 `Circuit`, `kV` all work), cells may carry units (`12470 V`, `0.5MVA`), and any column GridQL does
 not recognise is kept as a queryable attribute rather than dropped. Bad rows are reported with
 their line number instead of stopping the load. See [`examples/csv/`](examples/csv/) for the shape.
+
+The columns GridQL looks for, under whatever spelling your export uses:
+
+| File | Columns |
+| --- | --- |
+| `devices.csv` | `mrid`, `name`, `type`, `feeder`, `substation`, `phases`, `voltage`, plus the attributes of the type — `kva`, `kw`, `kvar`, `length`, `conductor`, `ampacity`, `state`, `normal_state`, `is_tie` |
+| `connections.csv` | `from_device`, `to_device` |
+| `feeders.csv` | `mrid`, `name`, `voltage`, `substation`, `head` |
+| `substations.csv` | `mrid`, `name`, `voltage` |
+
+A row needs only its `mrid` — or, in `connections.csv`, both ends. The accepted spellings live
+in `ALIASES` in [`gridql/ingest/csv_files.py`](gridql/ingest/csv_files.py). If your export uses
+names it does not know, or its files are not laid out this way at all, write a mapping instead
+(next section) rather than renaming columns. A `type` value is matched against GridQL's own vocabulary
+and then against CIM class names; anything it cannot place becomes generic equipment, with the
+original string kept as `source_type` and a note in the report.
+
+Two things worth exporting even though the loader does not demand them. Without
+`connections.csv` there is no connectivity, so `DOWNSTREAM OF`, `UPSTREAM OF`, `energized` and
+`depth` have nothing to walk and every device reads as an island. Without `state` and
+`normal_state` on switches, every switch takes its default and the whole feeder reports as
+energized. Run `gridql validate` after a load to see whether either applies.
+
+### Mapping your utility's columns
+
+The loose matching above is a guess, and a guess is fine for a first look. For data you will rely
+on, a **mapping file** says exactly what your export's files and columns mean. The files can be
+called anything and laid out however your GIS produces them, and the queries do not change.
+
+[`examples/mapped/`](examples/mapped/) is the sample feeder exported the way a GIS might do it —
+a file per equipment type, numeric circuit and station numbers, voltages in volts, switch positions
+as `O` and `C` — with the [mapping](examples/mapped/mapping.toml) that reads it:
+
+```bash
+gridql import-csv examples/mapped --mapping examples/mapped/mapping.toml
+```
+
+```
+loaded 11 devices, 1 feeders, 1 substations, 10 connections
+TRANSFORMER.csv: unmapped columns kept as attributes: install_year
+FDR-104: no head recorded, inferred BRK-001 as the only breaker on the feeder
+validation: no problems found
+```
+
+A mapping is TOML. Each section names a `file` and says which of its columns fill which GridQL
+field:
+
+```toml
+[feeders]
+file    = "CIRCUIT.csv"
+mrid    = "FDR-{CIRCUIT_NO}"
+name    = "CIRCUIT_DESC"
+voltage = { column = "NOM_VOLTS", unit = "V" }
+
+[[devices]]
+file   = "SWITCH.csv"
+mrid   = "FACILITY_ID"
+feeder = "FDR-{CIRCUIT_NO}"
+type   = { column = "SW_TYPE", values = { BKR = "breaker", RCL = "recloser", LBS = "switch" } }
+state  = { column = "POSITION", values = { O = "OPEN", C = "CLOSED" } }
+
+[[devices]]
+file = "TRANSFORMER.csv"
+type = { value = "transformer" }
+mrid = "FACILITY_ID"
+kva  = "KVA_RATING"
+
+[connections]
+file        = "CONNECTIVITY.csv"
+from_device = "FROM_FACILITY"
+to_device   = "TO_FACILITY"
+```
+
+The sections are `substations`, `feeders`, `devices` and `connections`. Write `[[devices]]` once
+per equipment file; the others may be repeated the same way. File names are relative to the
+directory you pass to `--csv`. Only `devices` is required: feeders and substations the equipment
+refers to are created for you, as they are without a mapping.
+
+A field can be written three ways:
+
+| Written as | Means | Example |
+| --- | --- | --- |
+| `"COLUMN"` | the value of that column | `name = "CIRCUIT_DESC"` |
+| `"text {COLUMN} text"` | a template: text built around columns | `mrid = "FDR-{CIRCUIT_NO}"` |
+| `{ value = "..." }` | the same value for every row | `type = { value = "transformer" }` |
+
+The table form also takes `column = "..."` or `template = "..."`, and three options:
+
+- `unit` — what unit bare numbers are in: `{ column = "NOM_VOLTS", unit = "V" }` reads `13800`
+  as 13.8 kV. A cell that carries its own unit, like `0.5MVA`, is taken at its word.
+- `values` — a translation of your codes into GridQL's: switch types, `O`/`C` positions, `Y`/`N`
+  flags. Matching ignores case.
+- `default` — what an empty cell means: `phases = { column = "PHASING", default = "ABC" }`.
+
+Templates matter more than they look. Every object needs an `mrid` that is unique across the whole
+network, and GIS tables often number their rows independently — switch `1001` and transformer
+`1001` — so `mrid = "SW-{OBJECTID}"` keeps them apart. Wherever one object points at another
+(`feeder`, `substation`, `head`, the two ends of a connection), use the same template the target
+used for its own `mrid`, so the references line up. If a column a template needs is empty, the
+whole field is empty rather than a half-built ID like `SW-`.
+
+**With a mapping, nothing is guessed.** Only the columns you map are read as fields. Every other
+column is kept as a queryable attribute under a lowercase name (`INSTALL_YEAR` becomes
+`install_year`), so a column your utility calls `STATUS` stays `status` rather than being taken for
+a switch position. Add `extras = false` to a section to keep none, or `extras = ["INSTALL_YEAR"]`
+to keep only those. A column whose name GridQL already uses, such as an unmapped `LENGTH`, is left
+out and reported, since it would be hidden behind GridQL's own attribute — map it to use it.
+
+#### Building a mapping for your own export
+
+Start small and let the import report guide you:
+
+1. Map one equipment file with just `file` and `mrid`, and run `gridql import-csv <dir> --mapping
+   <file>`. The report lists every column it kept as an attribute — those are the ones left to map.
+2. Map the fields you need. Add a `values` table for any column of codes.
+3. Run it again. Any code a `values` table does not cover is counted, file by file, and loaded as
+   written:
+
+   ```
+   SWITCH.csv: SW_TYPE value 'RCL' has no translation for type (1 row); used as written
+   ```
+
+4. Add the other equipment files and the connections, then check the result with
+   `gridql validate --csv <dir> --mapping <file>`.
+
+Mistakes in the mapping itself stop the load with a message naming the mapping file and a
+suggestion, rather than producing a network with holes in it:
+
+```
+error: gis-export.toml: [devices] SWITCH.csv: no column 'FACILTY_ID' for mrid (did you mean FACILITY_ID?). The file has: FACILITY_ID, DESCRIPTION, SW_TYPE, ...
+```
+
+Once it works, name it in `project.gridqlconfig` with `mapping = "gis-export.toml"`. It describes
+your utility's export format rather than one folder of it, so every CSV read in the project uses it
+— next month's export included — unless `--mapping` names a different one.
+
+One limit for now: connections have to be listed device to device. An export that records
+connectivity as `FROM_NODE` and `TO_NODE` on each device, with devices joined where their node IDs
+match, cannot be read yet.
 
 ### Persistence: SQLite
 
@@ -412,22 +575,25 @@ save_network(network, "grid.sqlite")
 | `gridql/lang/` | the language: lexer, parser, AST, evaluator |
 | `gridql/model/` | the semantic model: equipment, containers, the connectivity graph |
 | `gridql/storage/` | the SQLite schema and loader |
-| `gridql/ingest/` | reading and writing CSV |
+| `gridql/ingest/` | reading and writing CSV, and mapping files |
 | `gridql/cim/` | CIM import and export |
 | `gridql/validate.py` | model validation |
 | `gridql/config.py` | `project.gridqlconfig`: which dataset, which queries |
 | `gridql/data/sample.py` | the sample feeder, built through the public API |
 | `queries/` | example `.gridql` files |
+| `examples/` | the sample feeder as CSV: `csv/` in GridQL's own layout, `mapped/` as a GIS might export it |
 | `project.gridqlconfig` | this repository's own project file |
 | `tests/` | the test suite |
 | `idea.md` | the original design notes this was built from |
 
 ## Not built yet
 
-An editor, GeoJSON output and device geometry, and a JSON model format. The `EXPORT CIM` statement
-from the design notes is not its own syntax — a `PARAM`, `FED BY` and `RETURN cim` do the same job
-with clauses that already exist, as [`queries/export_feeder.gridql`](queries/export_feeder.gridql)
-shows.
+An editor, GeoJSON output and device geometry, a JSON model format, reading connectivity recorded
+as nodes rather than device pairs, and reading straight from a database such as Postgres.
+
+The `EXPORT CIM` statement from the design notes is not its own syntax — a `PARAM`, `FED BY` and
+`RETURN cim` do the same job with clauses that already exist, as
+[`queries/export_feeder.gridql`](queries/export_feeder.gridql) shows.
 
 ## Licence
 

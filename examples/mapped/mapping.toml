@@ -1,0 +1,79 @@
+# How this utility's GIS export becomes the GridQL model.
+#
+#   gridql --csv examples/mapped --mapping examples/mapped/mapping.toml 'FIND reclosers'
+#   gridql import-csv examples/mapped --mapping examples/mapped/mapping.toml
+#
+# A plain string names a column. A string with {COLUMN} in it is a template,
+# for building an ID from the utility's own numbers. A table can add the unit
+# the cells are written in, translate the export's codes, or give a constant.
+# File names are relative to the directory the CSV files are read from.
+
+[substations]
+file    = "STATION.csv"
+mrid    = "SUB-{STATION_NO}"
+name    = "STATION_NAME"
+voltage = { column = "BUS_VOLTS", unit = "V" }
+
+[feeders]
+file       = "CIRCUIT.csv"
+mrid       = "FDR-{CIRCUIT_NO}"
+name       = "CIRCUIT_DESC"
+substation = "SUB-{STATION_NO}"
+voltage    = { column = "NOM_VOLTS", unit = "V" }
+# No head column: the one breaker on each circuit is taken as its source.
+
+[[devices]]
+file         = "SWITCH.csv"
+mrid         = "FACILITY_ID"
+name         = "DESCRIPTION"
+feeder       = "FDR-{CIRCUIT_NO}"
+substation   = "SUB-{STATION_NO}"
+phases       = "PHASING"
+voltage      = { column = "OP_VOLTS", unit = "V" }
+type         = { column = "SW_TYPE", values = { BKR = "breaker", RCL = "recloser", LBS = "switch" } }
+state        = { column = "POSITION", values = { O = "OPEN", C = "CLOSED" } }
+normal_state = { column = "NORMAL_POSITION", values = { O = "OPEN", C = "CLOSED" } }
+is_tie       = "TIE_FLAG"
+
+[[devices]]
+file              = "TRANSFORMER.csv"
+type              = { value = "transformer" }
+mrid              = "FACILITY_ID"
+name              = "DESCRIPTION"
+feeder            = "FDR-{CIRCUIT_NO}"
+substation        = "SUB-{STATION_NO}"
+phases            = "PHASING"
+kva               = "KVA_RATING"
+primary_voltage   = { column = "HIGH_SIDE_VOLTS", unit = "V" }
+secondary_voltage = { column = "LOW_SIDE_VOLTS", unit = "V" }
+# INSTALL_YEAR is not mapped, so it is kept as install_year:
+#   FIND transformers WHERE install_year < 2000
+
+[[devices]]
+file       = "CONDUCTOR.csv"
+type       = { value = "line" }
+mrid       = "FACILITY_ID"
+feeder     = "FDR-{CIRCUIT_NO}"
+substation = "SUB-{STATION_NO}"
+phases     = "PHASING"
+voltage    = { column = "OP_VOLTS", unit = "V" }
+length     = { column = "LENGTH_FT", unit = "ft" }
+conductor  = "WIRE_SIZE"
+ampacity   = "RATED_AMPS"
+
+[[devices]]
+file       = "SERVICE_POINT.csv"
+type       = { value = "load" }
+mrid       = "FACILITY_ID"
+name       = "DESCRIPTION"
+feeder     = "FDR-{CIRCUIT_NO}"
+substation = "SUB-{STATION_NO}"
+phases     = "PHASING"
+voltage    = { column = "SERVICE_VOLTS", unit = "V" }
+kw         = "DEMAND_KW"
+kvar       = "DEMAND_KVAR"
+
+[connections]
+file        = "CONNECTIVITY.csv"
+from_device = "FROM_FACILITY"
+to_device   = "TO_FACILITY"

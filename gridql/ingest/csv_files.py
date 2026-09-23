@@ -21,6 +21,10 @@ Real exports never use the column names you expect, so headers are matched
 case-insensitively against a table of aliases, and any column that is not
 recognised is kept as an extra attribute rather than dropped -- which means
 a utility's own fields stay queryable.
+
+When the guessing is not good enough, a mapping file (:mod:`.mapping`)
+says exactly which of the utility's files and columns mean what, and the
+files can be called anything.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from ..model import MISSING, Device, GridObject, Network, Switch
 from ..cim.vocabulary import CIM_TO_MODEL
 from ..model.types import TYPE_ALIASES, TYPE_CLASSES, canonical_unit
 from ..units import UnitError, parse_quantity
+from .mapping import TARGETS, Mapping, load_mapping
 
 DEVICES = "devices.csv"
 CONNECTIONS = "connections.csv"
@@ -119,32 +124,55 @@ class CsvDocument:
     report: CsvReport
 
 
+@dataclass
+class _Row:
+    """One source row, keyed by model field, with where it came from."""
+
+    values: dict[str, str]
+    line: int
+    source: str
+    #: Columns a mapping kept as attributes. None when the row was read by
+    #: alias, where anything unrecognised in ``values`` is an extra.
+    extras: dict[str, Any] | None = None
+
+
 # -- reading ------------------------------------------------------------
 
 
-def load_csv(source: str | Path, **overrides: str | Path) -> Network:
+def load_csv(
+    source: str | Path, mapping: str | Path | Mapping | None = None, **overrides: str | Path
+) -> Network:
     """Read a network from CSV files."""
-    return read_csv(source, **overrides).network
+    return read_csv(source, mapping, **overrides).network
 
 
-def read_csv(source: str | Path, **overrides: str | Path) -> CsvDocument:
+def read_csv(
+    source: str | Path, mapping: str | Path | Mapping | None = None, **overrides: str | Path
+) -> CsvDocument:
     """Read CSV files, returning the network and a report on what was found.
 
     ``source`` is a directory of conventionally named files, or a single
     devices file. Individual paths may be given as keyword overrides
     (``devices=``, ``connections=``, ``feeders=``, ``substations=``).
-    """
-    paths = _resolve_paths(source, overrides)
-    if not paths["devices"].exists():
-        raise CsvError(f"no device file at {paths['devices']}")
 
+    With a ``mapping`` (a path, or a loaded :class:`Mapping`), ``source`` is
+    the directory holding the files the mapping names, and their columns
+    mean what the mapping says rather than what their headers suggest.
+    """
     report = CsvReport()
+    if mapping is None:
+        tables = _conventional_tables(source, overrides)
+    else:
+        if overrides:
+            raise CsvError("a mapping names its own files; set file = ... in the mapping instead")
+        tables = _mapped_tables(source, mapping, report)
+
     network = Network()
 
-    for row, line in _rows(paths["substations"], report):
-        _add_substation(network, row, line, report, paths["substations"].name)
-    for row, line in _rows(paths["feeders"], report):
-        _add_feeder(network, row, line, report, paths["feeders"].name)
+    for row in tables["substations"]:
+        _add_substation(network, row, report)
+    for row in tables["feeders"]:
+        _add_feeder(network, row, report)
 
     heads: dict[str, str] = {}
     for feeder in network.feeders:
@@ -152,14 +180,14 @@ def read_csv(source: str | Path, **overrides: str | Path) -> CsvDocument:
             heads[feeder.mrid] = feeder.head
             feeder.head = None  # set again once the devices exist
 
-    devices = list(_rows(paths["devices"], report))
+    devices = list(tables["devices"])
     _ensure_containers(network, devices)
 
-    for row, line in devices:
-        _add_device(network, row, line, report, paths["devices"].name)
+    for row in devices:
+        _add_device(network, row, report)
 
-    for row, line in _rows(paths["connections"], report):
-        _add_connection(network, row, line, report, paths["connections"].name)
+    for row in tables["connections"]:
+        _add_connection(network, row, report)
 
     for mrid, head in heads.items():
         feeder = network.objects.get(mrid)
@@ -200,26 +228,95 @@ def _resolve_paths(source: str | Path, overrides: dict) -> dict[str, Path]:
     return paths
 
 
-def _rows(path: Path, report: CsvReport) -> Iterator[tuple[dict[str, str], int]]:
-    """Yield each row keyed by canonical attribute name, with its line number."""
+def _conventional_tables(source: str | Path, overrides: dict) -> dict[str, Iterator[_Row]]:
+    paths = _resolve_paths(source, overrides)
+    if not paths["devices"].exists():
+        raise CsvError(f"no device file at {paths['devices']}")
+    return {kind: _rows(path) for kind, path in (
+        ("substations", paths["substations"]),
+        ("feeders", paths["feeders"]),
+        ("devices", paths["devices"]),
+        ("connections", paths["connections"]),
+    )}
+
+
+def _rows(path: Path) -> Iterator[_Row]:
+    """Each row keyed by canonical attribute name, guessed from the header."""
+    header, records = _table(path)
+    columns = [_canonical(name) for name in header]
+    for line, values in records:
+        row = {
+            column: value.strip()
+            for column, value in zip(columns, values)
+            if column and value.strip()
+        }
+        yield _Row(row, line, path.name)
+
+
+def _mapped_tables(
+    source: str | Path, mapping: str | Path | Mapping, report: CsvReport
+) -> dict[str, Iterator[_Row]]:
+    directory = Path(source)
+    if not directory.is_dir():
+        raise CsvError(
+            f"with a mapping, {source} must be the directory holding the files it names"
+        )
+    if not isinstance(mapping, Mapping):
+        mapping = load_mapping(mapping)
+
+    missing = [
+        section.file
+        for kind in TARGETS
+        for section in mapping.of(kind)
+        if not (directory / section.file).is_file()
+    ]
+    if missing:
+        where = f" (from {mapping.path})" if mapping.path else ""
+        raise CsvError(f"{directory} has no {', '.join(missing)}, which the mapping{where} names")
+
+    return {kind: _mapped_rows(directory, mapping.of(kind), report) for kind in TARGETS}
+
+
+def _mapped_rows(directory: Path, sections, report: CsvReport) -> Iterator[_Row]:
+    """Each row of each file a mapping names, translated by that mapping."""
+    for section in sections:
+        header, records = _table(directory / section.file)
+        if not header:
+            report.notes.append(f"{section.file}: empty file")
+            continue
+        bound = section.bind(header)
+        for line, values in records:
+            record = dict(zip(header, values))
+            fields, extras = bound.translate(record)
+            yield _Row(
+                fields, line, section.file, {key: _scalar(text) for key, text in extras.items()}
+            )
+        report.notes.extend(bound.notes())
+
+
+def _table(path: Path) -> tuple[list[str], Iterator[tuple[int, list[str]]]]:
+    """A file's header, and its non-blank rows with their line numbers.
+
+    A missing or empty file is an empty table: the conventional files other
+    than devices.csv are optional.
+    """
     if not path.exists():
-        return
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.reader(handle)
-        try:
-            header = next(reader)
-        except StopIteration:
-            return
-        columns = [_canonical(name) for name in header]
-        for line, values in enumerate(reader, start=2):
-            if not any(value.strip() for value in values):
-                continue
-            row = {
-                column: value.strip()
-                for column, value in zip(columns, values)
-                if column and value.strip()
-            }
-            yield row, line
+        return [], iter(())
+    handle = path.open(newline="", encoding="utf-8-sig")
+    reader = csv.reader(handle)
+    try:
+        header = next(reader)
+    except StopIteration:
+        handle.close()
+        return [], iter(())
+
+    def records() -> Iterator[tuple[int, list[str]]]:
+        with handle:
+            for line, values in enumerate(reader, start=2):
+                if any(value.strip() for value in values):
+                    yield line, values
+
+    return header, records()
 
 
 def _canonical(header: str) -> str:
@@ -230,7 +327,8 @@ def _canonical(header: str) -> str:
 # -- building objects ---------------------------------------------------
 
 
-def _add_substation(network, row, line, report, source) -> None:
+def _add_substation(network, source_row: _Row, report) -> None:
+    row, line, source = source_row.values, source_row.line, source_row.source
     mrid = row.get("mrid")
     if not mrid:
         report.problem(source, line, "no mRID")
@@ -242,11 +340,12 @@ def _add_substation(network, row, line, report, source) -> None:
         mrid,
         name=row.get("name", ""),
         voltage=_quantity(row.get("voltage"), "voltage", report, source, line),
-        extras=_extras(row, {"mrid", "name", "voltage"}),
+        extras=_extras(row, {"mrid", "name", "voltage"}, source_row.extras),
     )
 
 
-def _add_feeder(network, row, line, report, source) -> None:
+def _add_feeder(network, source_row: _Row, report) -> None:
+    row, line, source = source_row.values, source_row.line, source_row.source
     mrid = row.get("mrid")
     if not mrid:
         report.problem(source, line, "no mRID")
@@ -259,7 +358,7 @@ def _add_feeder(network, row, line, report, source) -> None:
         name=row.get("name", ""),
         voltage=_quantity(row.get("voltage"), "voltage", report, source, line),
         substation=row.get("substation"),
-        extras=_extras(row, {"mrid", "name", "voltage", "substation", "head"}),
+        extras=_extras(row, {"mrid", "name", "voltage", "substation", "head"}, source_row.extras),
     )
     feeder.head = row.get("head")
 
@@ -273,7 +372,8 @@ def _ensure_containers(network: Network, devices: list) -> None:
     for feeder in network.feeders:
         if feeder.substation and feeder.substation not in network.objects:
             network.add_substation(feeder.substation)
-    for row, _line in devices:
+    for source_row in devices:
+        row = source_row.values
         substation = row.get("substation")
         if substation and substation not in network.objects:
             network.add_substation(substation)
@@ -282,7 +382,8 @@ def _ensure_containers(network: Network, devices: list) -> None:
             network.add_feeder(feeder, substation=substation)
 
 
-def _add_device(network, row, line, report, source) -> None:
+def _add_device(network, source_row: _Row, report) -> None:
+    row, line, source = source_row.values, source_row.line, source_row.source
     mrid = row.get("mrid")
     if not mrid:
         report.problem(source, line, "no mRID")
@@ -326,7 +427,7 @@ def _add_device(network, row, line, report, source) -> None:
         if row.get("conductor"):
             fields["conductor"] = row["conductor"]
 
-    extras = _extras(row, handled)
+    extras = _extras(row, handled, source_row.extras)
     if note:
         extras["source_type"] = row.get("type", "")
     fields["extras"] = extras
@@ -337,7 +438,8 @@ def _add_device(network, row, line, report, source) -> None:
         report.problem(source, line, f"{mrid}: {error}")
 
 
-def _add_connection(network, row, line, report, source) -> None:
+def _add_connection(network, source_row: _Row, report) -> None:
+    row, line, source = source_row.values, source_row.line, source_row.source
     first, second = row.get("from_device"), row.get("to_device")
     if not first or not second:
         report.problem(source, line, "needs both from_device and to_device")
@@ -413,13 +515,20 @@ def _boolean(text: str | None) -> bool:
     return bool(text) and text.strip().lower() in _BOOL_TRUE
 
 
-def _extras(row: dict[str, str], handled: set[str]) -> dict[str, Any]:
-    """Columns the model has no field for, kept so they stay queryable."""
-    return {
+def _extras(
+    row: dict[str, str], handled: set[str], kept: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Columns the model has no field for, kept so they stay queryable.
+
+    ``kept`` is what a mapping set aside itself. A field it mapped that this
+    kind of object has no use for -- kva on a switch -- is kept alongside.
+    """
+    extras = {
         column: _scalar(value)
         for column, value in row.items()
         if column not in handled
     }
+    return extras | (kept or {})
 
 
 def _scalar(text: str) -> Any:
