@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, Mapping
 
 from ..errors import GridQLError, GridQLNameError, UnitError
-from ..model import MISSING, GridObject, Network
+from ..model import MISSING, Device, GridObject, Network
 from ..model.device import field_names
 from ..model.types import attribute_universe, canonical_unit, class_for, plural, resolve_type
 from ..units import convert
@@ -259,6 +259,8 @@ def evaluate(network: Network, query: Query) -> Result:
             distances = _distances(network, relation, related)
         allowed = {obj.mrid for obj in related}
         objects = [obj for obj in objects if obj.mrid in allowed]
+    if query.relations and not issubclass(class_for(type_key), Device):
+        _refuse_container_topology(network, query)
 
     # Taken from every candidate, not only the ones topology kept, so a
     # utility's own column is known even where this slice lacks it.
@@ -283,6 +285,27 @@ def evaluate(network: Network, query: Query) -> Result:
 
     return Result(
         query, query.type_name, type_key, objects, network, select, None, distances
+    )
+
+
+def _refuse_container_topology(network: Network, query: Query) -> None:
+    """Say why a topology relation can never find a feeder or substation.
+
+    Topology walks equipment. Even with a feeder as the target, what comes
+    back is the feeder's equipment, never another container -- so the query
+    would answer "none" to a question it cannot ask, and look like a real
+    answer. Pointing at the query that was probably meant is more use.
+    """
+    relation = query.relations[0]
+    target = network.get(relation.target)
+    wanted = plural(resolve_type(query.type_name))
+    if wanted == "feeders" and target.TYPE == "substation":
+        meant = f'FIND feeders WHERE substation = "{target.mrid}"'
+    else:
+        meant = f"FIND devices {relation.describe()}"
+    raise GridQLError(
+        f"{wanted} are containers, not equipment, and {relation.kind} only ever finds "
+        f"equipment, so this can match nothing; did you mean {meant}?"
     )
 
 

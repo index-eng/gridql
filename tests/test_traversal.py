@@ -172,6 +172,50 @@ class HopsTests(unittest.TestCase):
             self.assertIn("topology target", str(raised.exception))
 
 
+class ContainerTopologyTests(unittest.TestCase):
+    """Topology finds equipment, so asking it for a feeder can find nothing."""
+
+    def setUp(self):
+        self.network = build_sample_network()
+
+    def refusal(self, source):
+        with self.assertRaises(GridQLError) as raised:
+            execute(self.network, source)
+        return str(raised.exception)
+
+    def test_a_feeder_is_never_downstream_of_anything(self):
+        message = self.refusal("FIND feeder DOWNSTREAM OF 'FDR-104'")
+        self.assertIn("feeders are containers, not equipment", message)
+        self.assertIn('did you mean FIND devices DOWNSTREAM OF "FDR-104"?', message)
+
+    def test_every_relation_is_refused_for_both_containers(self):
+        for source in (
+            'FIND feeders UPSTREAM OF "XFMR-001"',
+            'FIND feeders CONNECTED TO "BRK-001"',
+            'FIND substations FED BY "FDR-104"',
+            'FIND substations DOWNSTREAM OF "REC-001"',
+        ):
+            with self.subTest(source=source):
+                self.assertIn("containers, not equipment", self.refusal(source))
+
+    def test_feeders_fed_by_a_substation_points_at_the_container_field(self):
+        message = self.refusal('FIND feeders FED BY "SUB-001"')
+        self.assertIn('did you mean FIND feeders WHERE substation = "SUB-001"?', message)
+        self.assertEqual(
+            execute(self.network, 'FIND feeders WHERE substation = "SUB-001"').mrids,
+            ["FDR-104"],
+        )
+
+    def test_an_unknown_target_is_still_reported_as_unknown(self):
+        self.assertIn("no device, feeder or substation named", self.refusal(
+            'FIND feeders DOWNSTREAM OF "NOPE"'
+        ))
+
+    def test_devices_and_containers_without_topology_still_work(self):
+        self.assertEqual(execute(self.network, "FIND feeders").mrids, ["FDR-104"])
+        self.assertEqual(len(execute(self.network, 'FIND devices FED BY "FDR-104"')), 11)
+
+
 class DepthTests(unittest.TestCase):
     def setUp(self):
         self.network = sample()
