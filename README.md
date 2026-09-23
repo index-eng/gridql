@@ -479,7 +479,18 @@ gridql export-csv ./out --db grid.sqlite                         # and back out 
 ```
 
 `--csv` works anywhere `--db` does, including `run` and `validate`. A single file is taken to be
-the equipment list. There is a worked example in [`examples/csv/`](examples/csv/).
+the equipment list.
+
+**The example data** in [`examples/csv/`](examples/csv/) is two 12.47 kV feeders out of the Cedar
+Hill substation, 77 devices in all. Feeder 1201 has a mid-line recloser, a switched capacitor bank,
+a sectionalizing switch, a sectionalized branch, fused single-phase laterals, underground
+commercial services, and a normally open tie to 1202. One lateral fuse has blown:
+
+```bash
+gridql --csv examples/csv 'FIND devices WHERE state != normal_state'           # FU-1201-04
+gridql --csv examples/csv 'FIND loads WHERE NOT energized SELECT SUM(customer_count)'   # 9
+gridql --csv examples/csv 'FIND devices UPSTREAM OF "SP-40335"'                # back to BKR-1201
+```
 
 **Real exports never use the column names you expect**, so headers are matched case-insensitively
 against a table of aliases — `OBJECTID`, `Device Type`, `Circuit`, `Normal Position`, `kV`,
@@ -617,8 +628,9 @@ SWITCH.csv: unmapped columns kept as attributes: install_year, mfr
 
 A project names its mapping with `mapping = "gis-export.toml"` in `project.gridqlconfig`. It
 describes the utility's export format rather than one directory of it, so it applies to any CSV
-read in the project. [`examples/mapped/`](examples/mapped/) is the sample feeder as a GIS might
-export it, with the mapping that reads it back to exactly the same network.
+read in the project. [`examples/mapped/`](examples/mapped/) is the example data as a GIS might
+export it — a file per equipment type, connected through `FROM_NODE` and `TO_NODE` — with the
+mapping that reads it back to exactly the same network.
 
 ## Persistence
 

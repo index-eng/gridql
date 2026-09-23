@@ -7,6 +7,10 @@
 # for building an ID from the utility's own numbers. A table can add the unit
 # the cells are written in, translate the export's codes, or give a constant.
 # File names are relative to the directory the CSV files are read from.
+#
+# There is no connectivity table: like most GIS exports, every piece of
+# equipment names the nodes at its ends (FROM_NODE, TO_NODE, or NODE for
+# one-ended equipment), and equipment is connected wherever those match.
 
 [substations]
 file    = "STATION.csv"
@@ -30,10 +34,42 @@ feeder       = "FDR-{CIRCUIT_NO}"
 substation   = "SUB-{STATION_NO}"
 phases       = "PHASING"
 voltage      = { column = "OP_VOLTS", unit = "V" }
-type         = { column = "SW_TYPE", values = { BKR = "breaker", RCL = "recloser", LBS = "switch" } }
+type         = { column = "SW_TYPE", values = { BKR = "breaker", RCL = "recloser", LBS = "switch", SECT = "sectionalizer" } }
 state        = { column = "POSITION", values = { O = "OPEN", C = "CLOSED" } }
 normal_state = { column = "NORMAL_POSITION", values = { O = "OPEN", C = "CLOSED" } }
 is_tie       = "TIE_FLAG"
+from_node    = "FROM_NODE"
+to_node      = "TO_NODE"
+
+[[devices]]
+file         = "FUSE.csv"
+type         = { value = "fuse" }
+mrid         = "FACILITY_ID"
+name         = "DESCRIPTION"
+feeder       = "FDR-{CIRCUIT_NO}"
+substation   = "SUB-{STATION_NO}"
+phases       = "PHASING"
+voltage      = { column = "OP_VOLTS", unit = "V" }
+state        = { column = "POSITION", values = { O = "OPEN", C = "CLOSED" } }
+normal_state = { column = "NORMAL_POSITION", values = { O = "OPEN", C = "CLOSED" } }
+from_node    = "FROM_NODE"
+to_node      = "TO_NODE"
+# LINK_RATING is kept as link_rating:
+#   FIND fuses WHERE link_rating = "40T"
+
+[[devices]]
+file         = "CAPACITOR.csv"
+type         = { value = "capacitor" }
+mrid         = "FACILITY_ID"
+name         = "DESCRIPTION"
+feeder       = "FDR-{CIRCUIT_NO}"
+substation   = "SUB-{STATION_NO}"
+phases       = "PHASING"
+voltage      = { column = "OP_VOLTS", unit = "V" }
+kvar         = "KVAR_RATING"
+state        = { column = "POSITION", values = { O = "OPEN", C = "CLOSED" } }
+normal_state = { column = "NORMAL_POSITION", values = { O = "OPEN", C = "CLOSED" } }
+from_node    = "NODE"
 
 [[devices]]
 file              = "TRANSFORMER.csv"
@@ -43,11 +79,14 @@ name              = "DESCRIPTION"
 feeder            = "FDR-{CIRCUIT_NO}"
 substation        = "SUB-{STATION_NO}"
 phases            = "PHASING"
+voltage           = { column = "OP_VOLTS", unit = "V" }
 kva               = "KVA_RATING"
 primary_voltage   = { column = "HIGH_SIDE_VOLTS", unit = "V" }
 secondary_voltage = { column = "LOW_SIDE_VOLTS", unit = "V" }
-# INSTALL_YEAR is not mapped, so it is kept as install_year:
-#   FIND transformers WHERE install_year < 2000
+from_node         = "FROM_NODE"
+to_node           = "TO_NODE"
+# MOUNTING and INSTALL_YEAR are not mapped, so they are kept as attributes:
+#   FIND transformers WHERE install_year < 1990 AND mounting = "POLE"
 
 [[devices]]
 file       = "CONDUCTOR.csv"
@@ -60,6 +99,8 @@ voltage    = { column = "OP_VOLTS", unit = "V" }
 length     = { column = "LENGTH_FT", unit = "ft" }
 conductor  = "WIRE_SIZE"
 ampacity   = "RATED_AMPS"
+from_node  = "FROM_NODE"
+to_node    = "TO_NODE"
 
 [[devices]]
 file       = "SERVICE_POINT.csv"
@@ -72,8 +113,6 @@ phases     = "PHASING"
 voltage    = { column = "SERVICE_VOLTS", unit = "V" }
 kw         = "DEMAND_KW"
 kvar       = "DEMAND_KVAR"
-
-[connections]
-file        = "CONNECTIVITY.csv"
-from_device = "FROM_FACILITY"
-to_device   = "TO_FACILITY"
+from_node  = "NODE"
+# CUSTOMER_COUNT is kept as customer_count, so an outage can be counted:
+#   FIND loads WHERE NOT energized SELECT SUM(customer_count)

@@ -57,45 +57,78 @@ class MappingTestCase(unittest.TestCase):
 
 
 class ExampleTests(unittest.TestCase):
-    """examples/mapped is the sample feeder as a utility's GIS would export it."""
+    """examples/mapped is examples/csv as a utility's GIS would export it."""
 
     def setUp(self):
         self.document = read_csv(EXAMPLE, EXAMPLE_MAPPING)
         self.network = self.document.network
 
-    def test_it_is_the_sample_network(self):
-        self.assertEqual(
-            snapshot(self.network, extras=False),
-            snapshot(build_sample_network(), extras=False),
-        )
+    def rows(self, source):
+        return execute(self.network, source).rows()
+
+    def test_it_is_the_csv_example(self):
+        plain = read_csv(EXAMPLE.parent / "csv").network
+        self.assertEqual(snapshot(self.network), snapshot(plain))
+        self.assertEqual(self.network.nodes, plain.nodes)
 
     def test_it_validates_cleanly(self):
         self.assertEqual(validate(self.network).findings, [])
         self.assertEqual(self.document.report.problems, [])
 
+    def test_connectivity_comes_from_the_nodes_in_each_file(self):
+        self.assertEqual(self.network.links(), [])
+        self.assertIn("94 connections through 61 nodes", self.document.report.counts())
+
     def test_an_unmapped_column_stays_queryable(self):
-        found = execute(self.network, "FIND transformers WHERE install_year < 2000").mrids
-        self.assertEqual(found, ["XFMR-001"])
+        found = execute(self.network, "FIND transformers WHERE install_year < 1980").mrids
+        self.assertEqual(found, ["TX-40331", "TX-40416"])
         self.assertIn(
-            "TRANSFORMER.csv: unmapped columns kept as attributes: install_year",
+            "TRANSFORMER.csv: unmapped columns kept as attributes: mounting, install_year",
             self.document.report.notes,
         )
 
-    def test_queries_agree_with_the_sample(self):
-        sample = build_sample_network()
-        for query in (
-            'FIND devices DOWNSTREAM OF "REC-001"',
-            "FIND switches WHERE state != normal_state",
-            "FIND transformers WHERE kva >= 0.5MVA",
-            "FIND devices WHERE NOT energized",
-        ):
-            with self.subTest(query=query):
-                self.assertEqual(execute(self.network, query).mrids, execute(sample, query).mrids)
+    def test_the_blown_fuse_is_the_only_outage(self):
+        self.assertEqual(
+            execute(self.network, "FIND devices WHERE state != normal_state").mrids,
+            ["FU-1201-04"],
+        )
+        self.assertEqual(
+            self.rows("FIND loads WHERE NOT energized SELECT COUNT(*), SUM(customer_count)"),
+            [{"COUNT(*)": 2, "SUM(customer_count)": 9}],
+        )
+
+    def test_topology_follows_the_feeder_as_built(self):
+        self.assertEqual(
+            execute(self.network, 'FIND devices UPSTREAM OF "SP-40335" LIMIT 4').mrids,
+            ["TX-40335", "OH-1201-25", "OH-1201-24", "FU-1201-04"],
+        )
+        self.assertEqual(
+            execute(self.network, 'FIND reclosers UPSTREAM OF "SP-40335"').mrids,
+            ["REC-1201-01"],
+        )
+        self.assertEqual(
+            execute(self.network, 'FIND loads DOWNSTREAM OF "SEC-1201-01"').mrids,
+            ["SP-40340", "SP-40318", "SP-40331", "SP-40322", "SP-40335"],
+        )
+
+    def test_the_tie_joins_the_two_feeders_but_feeds_neither(self):
+        tie = self.network.get("TIE-1201-1202")
+        self.assertTrue(tie.is_tie)
+        self.assertEqual(
+            sorted(execute(self.network, 'FIND devices CONNECTED TO "TIE-1201-1202"').mrids),
+            ["OH-1201-07", "OH-1202-03"],
+        )
+        self.assertNotIn(
+            "OH-1202-03",
+            execute(self.network, 'FIND devices DOWNSTREAM OF "OH-1201-07"').mrids,
+        )
 
     def test_written_back_out_it_reads_without_the_mapping(self):
         with tempfile.TemporaryDirectory() as out:
             write_csv(self.network, out)
-            self.assertEqual(snapshot(read_csv(out).network), snapshot(self.network))
+            back = read_csv(out).network
+            self.assertEqual(snapshot(back), snapshot(self.network))
+            self.assertEqual(back.nodes, self.network.nodes)
 
 
 class FieldTests(MappingTestCase):
@@ -331,8 +364,8 @@ class CommandLineTests(unittest.TestCase):
             ["import-csv", str(EXAMPLE), "--mapping", str(EXAMPLE_MAPPING), "--no-config"]
         )
         self.assertEqual(code, 0)
-        self.assertIn("loaded 11 devices", out)
-        self.assertIn("kept as attributes: install_year", out)
+        self.assertIn("loaded 77 devices", out)
+        self.assertIn("kept as attributes: mounting, install_year", out)
         self.assertIn("validation: no problems found", out)
 
     def test_a_query_against_mapped_files(self):
@@ -340,7 +373,7 @@ class CommandLineTests(unittest.TestCase):
             ["--csv", str(EXAMPLE), "--mapping", str(EXAMPLE_MAPPING), "FIND reclosers"]
         )
         self.assertEqual(code, 0)
-        self.assertIn("REC-001", out)
+        self.assertIn("REC-1201-01", out)
 
     def test_run_keeps_the_mapping_for_itself_not_as_a_parameter(self):
         rest, values = split_parameters(["q.gridql", "--mapping", "m.toml", "--feeder", "F"])
@@ -373,13 +406,13 @@ class ConfigTests(unittest.TestCase):
             f'csv = "{EXAMPLE}"\nmapping = "{EXAMPLE_MAPPING}"\n'
         )
         network = network_for(config=load_config(self.root / CONFIG_NAME))
-        self.assertEqual(len(network.devices), 11)
+        self.assertEqual(len(network.devices), 77)
 
     def test_the_project_mapping_applies_to_other_csv_too(self):
         # It describes the utility's export format, not one directory of it.
         (self.root / CONFIG_NAME).write_text(f'mapping = "{EXAMPLE_MAPPING}"\n')
         network = network_for(csv=str(EXAMPLE), config=load_config(self.root / CONFIG_NAME))
-        self.assertEqual(len(network.devices), 11)
+        self.assertEqual(len(network.devices), 77)
 
     def test_a_database_ignores_the_project_mapping(self):
         from gridql.storage import save_network

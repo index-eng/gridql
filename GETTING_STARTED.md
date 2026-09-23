@@ -378,8 +378,14 @@ names are matched loosely (`OBJECTID`, `Device Type`,
 `Circuit`, `kV` all work), cells may carry units (`12470 V`, `0.5MVA`), and any column GridQL does
 not recognise is kept as a queryable attribute rather than dropped. Bad rows are reported with
 their line number instead of stopping the load. A query still runs when that happens, but warns
-first — so an empty answer caused by rows that never loaded does not look like a real one. See
-[`examples/csv/`](examples/csv/) for the shape.
+first — so an empty answer caused by rows that never loaded does not look like a real one.
+
+[`examples/csv/`](examples/csv/) shows the shape: two feeders out of a small substation, 77
+devices, with a blown lateral fuse to find.
+
+```bash
+gridql --csv examples/csv 'FIND loads WHERE NOT energized SELECT name, customer_count'
+```
 
 The columns GridQL looks for, under whatever spelling your export uses:
 
@@ -409,18 +415,25 @@ The loose matching above is a guess, and a guess is fine for a first look. For d
 on, a **mapping file** says exactly what your export's files and columns mean. The files can be
 called anything and laid out however your GIS produces them, and the queries do not change.
 
-[`examples/mapped/`](examples/mapped/) is the sample feeder exported the way a GIS might do it —
+[`examples/mapped/`](examples/mapped/) is the example data exported the way a GIS might do it —
 a file per equipment type, numeric circuit and station numbers, voltages in volts, switch positions
-as `O` and `C` — with the [mapping](examples/mapped/mapping.toml) that reads it:
+as `O` and `C`, connectivity as the node at each end of every device — with the
+[mapping](examples/mapped/mapping.toml) that reads it:
 
 ```bash
 gridql import-csv examples/mapped --mapping examples/mapped/mapping.toml
 ```
 
 ```
-loaded 11 devices, 1 feeders, 1 substations, 10 connections
-TRANSFORMER.csv: unmapped columns kept as attributes: install_year
-FDR-104: no head recorded, inferred BRK-001 as the only breaker on the feeder
+loaded 77 devices, 2 feeders, 1 substations, 94 connections through 61 nodes
+STATION.csv: unmapped columns kept as attributes: source_kv
+FUSE.csv: unmapped columns kept as attributes: link_rating
+CAPACITOR.csv: unmapped columns kept as attributes: control
+TRANSFORMER.csv: unmapped columns kept as attributes: mounting, install_year
+CONDUCTOR.csv: unmapped columns kept as attributes: construction
+SERVICE_POINT.csv: unmapped columns kept as attributes: customer_count
+FDR-1201: no head recorded, inferred BKR-1201 as the only breaker on the feeder
+FDR-1202: no head recorded, inferred BKR-1202 as the only breaker on the feeder
 validation: no problems found
 ```
 
@@ -611,7 +624,7 @@ save_network(network, "grid.sqlite")
 | `gridql/config.py` | `project.gridqlconfig`: which dataset, which queries |
 | `gridql/data/sample.py` | the sample feeder, built through the public API |
 | `queries/` | example `.gridql` files |
-| `examples/` | the sample feeder as CSV: `csv/` in GridQL's own layout, `mapped/` as a GIS might export it |
+| `examples/` | two realistic feeders as CSV: `csv/` in GridQL's own layout, `mapped/` as a GIS might export it |
 | `project.gridqlconfig` | this repository's own project file |
 | `tests/` | the test suite |
 | `idea.md` | the original design notes this was built from |

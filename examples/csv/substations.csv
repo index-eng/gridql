@@ -1,2 +1,2 @@
-mrid,name,voltage
-SUB-001,Oakdale,13.8
+mrid,name,voltage,source_kv
+SUB-12,Cedar Hill,12.47,115

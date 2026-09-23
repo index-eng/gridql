@@ -65,7 +65,9 @@ class RoundTripTests(CsvTestCase):
         from gridql import validate
 
         document = read_csv(EXAMPLES)
-        self.assertEqual(len(document.network.devices), 11)
+        self.assertEqual(len(document.network.devices), 77)
+        self.assertEqual(len(document.network.feeders), 2)
+        self.assertEqual(document.report.problems, [])
         self.assertEqual(validate(document.network).findings, [])
 
     def test_extras_survive_the_round_trip_as_their_own_columns(self):

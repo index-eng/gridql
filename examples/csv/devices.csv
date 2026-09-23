@@ -1,12 +1,78 @@
-mrid,name,type,feeder,substation,phases,voltage,state,normal_state,is_tie,kva,primary_voltage,secondary_voltage,kw,kvar,length,conductor,ampacity
-BRK-001,Oakdale 104 Breaker,breaker,FDR-104,SUB-001,ABC,13.8,CLOSED,CLOSED,false,,,,,,,,
-LN-001,LN-001,line,FDR-104,SUB-001,ABC,13.8,,,,,,,,,2400,336 ACSR,530
-LN-002,LN-002,line,FDR-104,SUB-001,ABC,13.8,,,,,,,,,5100,336 ACSR,530
-LOAD-001,Elm St Commercial,load,FDR-104,SUB-001,ABC,0.48,,,,,,,310,95,,,
-LOAD-002,Maple Ln Residential,load,FDR-104,SUB-001,A,0.24,,,,,,,48,12,,,
-REC-001,Mainline Recloser,recloser,FDR-104,SUB-001,ABC,13.8,CLOSED,CLOSED,false,,,,,,,,
-SW-001,Mainline Sectionalizing Switch,switch,FDR-104,SUB-001,ABC,13.8,CLOSED,CLOSED,false,,,,,,,,
-SW-002,Maple Ln Lateral Switch,switch,FDR-104,SUB-001,ABC,13.8,OPEN,CLOSED,false,,,,,,,,
-TIE-001,Tie to FDR-107,switch,FDR-104,SUB-001,ABC,13.8,OPEN,OPEN,true,,,,,,,,
-XFMR-001,Elm St Bank,transformer,FDR-104,SUB-001,ABC,13.8,,,,500,13.8,0.48,,,,,
-XFMR-002,Maple Ln Bank,transformer,FDR-104,SUB-001,A,13.8,,,,75,13.8,0.24,,,,,
+mrid,name,type,feeder,substation,phases,voltage,state,normal_state,is_tie,kva,primary_voltage,secondary_voltage,kw,kvar,length,conductor,ampacity,from_node,to_node,construction,control,customer_count,install_year,link_rating,mounting
+BKR-1201,Cedar Hill 1201 Breaker,breaker,FDR-1201,SUB-12,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,40001,40101,,,,,,
+BKR-1202,Cedar Hill 1202 Breaker,breaker,FDR-1202,SUB-12,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,50001,50101,,,,,,
+CAP-1201-01,Mainline cap bank,capacitor,FDR-1201,SUB-12,ABC,12.47,CLOSED,CLOSED,,,,,,300,,,,40111,,,VAR,,,,
+FU-1201-01,Maple Ave tap,fuse,FDR-1201,SUB-12,A,12.47,CLOSED,CLOSED,false,,,,,,,,,40103,40104,,,,,40T,
+FU-1201-02,Cedar Hill Plaza riser,fuse,FDR-1201,SUB-12,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,40113,40114,,,,,100E,
+FU-1201-03,Birchwood Ct tap,fuse,FDR-1201,SUB-12,B,12.47,CLOSED,CLOSED,false,,,,,,,,,40122,40123,,,,,40T,
+FU-1201-04,Quarry Ln tap,fuse,FDR-1201,SUB-12,C,12.47,OPEN,CLOSED,false,,,,,,,,,40122,40128,,,,,25T,
+FU-1201-05,Oak St tap,fuse,FDR-1201,SUB-12,C,12.47,CLOSED,CLOSED,false,,,,,,,,,40135,40136,,,,,40T,
+FU-1201-06,Cedar Hill Elementary riser,fuse,FDR-1201,SUB-12,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,40141,40142,,,,,65E,
+FU-1202-01,Hillcrest Rd tap,fuse,FDR-1202,SUB-12,A,12.47,CLOSED,CLOSED,false,,,,,,,,,50103,50104,,,,,40T,
+FU-1202-02,Hillcrest Medical riser,fuse,FDR-1202,SUB-12,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,50110,50111,,,,,65E,
+OH-1201-01,OH-1201-01,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,1850,477 ACSR Hawk,659,40102,40103,OH,,,,,
+OH-1201-02,OH-1201-02,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,2200,477 ACSR Hawk,659,40103,40111,OH,,,,,
+OH-1201-03,OH-1201-03,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,1600,336.4 ACSR Linnet,529,40112,40113,OH,,,,,
+OH-1201-04,OH-1201-04,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,2400,336.4 ACSR Linnet,529,40119,40120,OH,,,,,
+OH-1201-05,OH-1201-05,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,1750,336.4 ACSR Linnet,529,40120,40135,OH,,,,,
+OH-1201-06,OH-1201-06,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,1300,336.4 ACSR Linnet,529,40135,40141,OH,,,,,
+OH-1201-07,OH-1201-07,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,950,336.4 ACSR Linnet,529,40141,40145,OH,,,,,
+OH-1201-11,OH-1201-11,line,FDR-1201,SUB-12,A,12.47,,,,,,,,,780,#2 ACSR Sparrow,184,40104,40105,OH,,,,,
+OH-1201-12,OH-1201-12,line,FDR-1201,SUB-12,A,12.47,,,,,,,,,640,#2 ACSR Sparrow,184,40105,40107,OH,,,,,
+OH-1201-13,OH-1201-13,line,FDR-1201,SUB-12,A,12.47,,,,,,,,,520,#2 ACSR Sparrow,184,40107,40109,OH,,,,,
+OH-1201-21,OH-1201-21,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,1900,1/0 ACSR Raven,242,40121,40122,OH,,,,,
+OH-1201-22,OH-1201-22,line,FDR-1201,SUB-12,B,12.47,,,,,,,,,560,#2 ACSR Sparrow,184,40123,40124,OH,,,,,
+OH-1201-23,OH-1201-23,line,FDR-1201,SUB-12,B,12.47,,,,,,,,,480,#2 ACSR Sparrow,184,40124,40126,OH,,,,,
+OH-1201-24,OH-1201-24,line,FDR-1201,SUB-12,C,12.47,,,,,,,,,700,#2 ACSR Sparrow,184,40128,40129,OH,,,,,
+OH-1201-25,OH-1201-25,line,FDR-1201,SUB-12,C,12.47,,,,,,,,,390,#2 ACSR Sparrow,184,40129,40131,OH,,,,,
+OH-1201-26,OH-1201-26,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,1100,1/0 ACSR Raven,242,40122,40133,OH,,,,,
+OH-1201-31,OH-1201-31,line,FDR-1201,SUB-12,C,12.47,,,,,,,,,620,#2 ACSR Sparrow,184,40136,40137,OH,,,,,
+OH-1201-32,OH-1201-32,line,FDR-1201,SUB-12,C,12.47,,,,,,,,,540,#2 ACSR Sparrow,184,40137,40139,OH,,,,,
+OH-1202-01,OH-1202-01,line,FDR-1202,SUB-12,ABC,12.47,,,,,,,,,2600,477 ACSR Hawk,659,50102,50103,OH,,,,,
+OH-1202-02,OH-1202-02,line,FDR-1202,SUB-12,ABC,12.47,,,,,,,,,2100,336.4 ACSR Linnet,529,50109,50110,OH,,,,,
+OH-1202-03,OH-1202-03,line,FDR-1202,SUB-12,ABC,12.47,,,,,,,,,1500,336.4 ACSR Linnet,529,50110,50114,OH,,,,,
+OH-1202-11,OH-1202-11,line,FDR-1202,SUB-12,A,12.47,,,,,,,,,900,#2 ACSR Sparrow,184,50104,50105,OH,,,,,
+OH-1202-12,OH-1202-12,line,FDR-1202,SUB-12,A,12.47,,,,,,,,,450,#2 ACSR Sparrow,184,50105,50107,OH,,,,,
+REC-1201-01,Midline Recloser,recloser,FDR-1201,SUB-12,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,40111,40112,,,,,,
+REC-1202-01,Midline Recloser,recloser,FDR-1202,SUB-12,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,50103,50109,,,,,,
+SEC-1201-01,Ridge Rd Sectionalizer,sectionalizer,FDR-1201,SUB-12,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,40120,40121,,,,,,
+SP-40117,Maple Ave 100-114,load,FDR-1201,SUB-12,A,0.24,,,,,,,27,7,,,,40106,,,,6,,,
+SP-40121,Maple Ave 116-128,load,FDR-1201,SUB-12,A,0.24,,,,,,,19,5,,,,40108,,,,5,,,
+SP-40126,Maple Ave 130-136,load,FDR-1201,SUB-12,A,0.24,,,,,,,11,3,,,,40110,,,,3,,,
+SP-40210,Cedar Hill Plaza - Grocery,load,FDR-1201,SUB-12,ABC,0.48,,,,,,,395,130,,,,40116,,,,1,,,
+SP-40214,Cedar Hill Plaza - Retail,load,FDR-1201,SUB-12,ABC,0.208,,,,,,,150,48,,,,40118,,,,8,,,
+SP-40318,Birchwood Ct 2-12,load,FDR-1201,SUB-12,B,0.24,,,,,,,26,7,,,,40125,,,,6,,,
+SP-40322,Birchwood Ct 14-24,load,FDR-1201,SUB-12,B,0.24,,,,,,,25,7,,,,40127,,,,6,,,
+SP-40331,Quarry Ln 3-9,load,FDR-1201,SUB-12,C,0.24,,,,,,,12,3,,,,40130,,,,4,,,
+SP-40335,Quarry Ln 11-19,load,FDR-1201,SUB-12,C,0.24,,,,,,,17,5,,,,40132,,,,5,,,
+SP-40340,Ridge Rd Farm Supply,load,FDR-1201,SUB-12,ABC,0.208,,,,,,,42,14,,,,40134,,,,1,,,
+SP-40412,Oak St 201-211,load,FDR-1201,SUB-12,C,0.24,,,,,,,18,5,,,,40138,,,,5,,,
+SP-40416,Oak St 213-219,load,FDR-1201,SUB-12,C,0.24,,,,,,,10,3,,,,40140,,,,3,,,
+SP-40512,Cedar Hill Elementary,load,FDR-1201,SUB-12,ABC,0.48,,,,,,,210,70,,,,40144,,,,1,,,
+SP-50117,Hillcrest Rd 5-17,load,FDR-1202,SUB-12,A,0.24,,,,,,,30,8,,,,50106,,,,7,,,
+SP-50120,Hillcrest Rd 19-23,load,FDR-1202,SUB-12,A,0.24,,,,,,,12,3,,,,50108,,,,3,,,
+SP-50214,Hillcrest Medical Offices,load,FDR-1202,SUB-12,ABC,0.208,,,,,,,88,26,,,,50113,,,,4,,,
+SW-1201-01,Mainline Sectionalizing Switch,switch,FDR-1201,SUB-12,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,40113,40119,,,,,,
+TIE-1201-1202,Tie to Cedar Hill 1202,switch,FDR-1201,SUB-12,ABC,12.47,OPEN,OPEN,true,,,,,,,,,40145,50114,,,,,,
+TX-40117,Pole 40117,transformer,FDR-1201,SUB-12,A,12.47,,,,50,7.2,0.24,,,,,,40105,40106,,,,1994,,POLE
+TX-40121,Pole 40121,transformer,FDR-1201,SUB-12,A,12.47,,,,37.5,7.2,0.24,,,,,,40107,40108,,,,2003,,POLE
+TX-40126,Pole 40126,transformer,FDR-1201,SUB-12,A,12.47,,,,25,7.2,0.24,,,,,,40109,40110,,,,1988,,POLE
+TX-40210,Pad 40210,transformer,FDR-1201,SUB-12,ABC,12.47,,,,750,12.47,0.48,,,,,,40115,40116,,,,2006,,PAD
+TX-40214,Pad 40214,transformer,FDR-1201,SUB-12,ABC,12.47,,,,300,12.47,0.208,,,,,,40117,40118,,,,2006,,PAD
+TX-40318,Pole 40318,transformer,FDR-1201,SUB-12,B,12.47,,,,50,7.2,0.24,,,,,,40124,40125,,,,2015,,POLE
+TX-40322,Pole 40322,transformer,FDR-1201,SUB-12,B,12.47,,,,50,7.2,0.24,,,,,,40126,40127,,,,2015,,POLE
+TX-40331,Pole 40331,transformer,FDR-1201,SUB-12,C,12.47,,,,25,7.2,0.24,,,,,,40129,40130,,,,1976,,POLE
+TX-40335,Pole 40335,transformer,FDR-1201,SUB-12,C,12.47,,,,37.5,7.2,0.24,,,,,,40131,40132,,,,1991,,POLE
+TX-40340,Pole 40340,transformer,FDR-1201,SUB-12,ABC,12.47,,,,75,12.47,0.208,,,,,,40133,40134,,,,1999,,POLE
+TX-40412,Pole 40412,transformer,FDR-1201,SUB-12,C,12.47,,,,37.5,7.2,0.24,,,,,,40137,40138,,,,1987,,POLE
+TX-40416,Pole 40416,transformer,FDR-1201,SUB-12,C,12.47,,,,25,7.2,0.24,,,,,,40139,40140,,,,1979,,POLE
+TX-40512,Pad 40512,transformer,FDR-1201,SUB-12,ABC,12.47,,,,500,12.47,0.48,,,,,,40143,40144,,,,2012,,PAD
+TX-50117,Pole 50117,transformer,FDR-1202,SUB-12,A,12.47,,,,50,7.2,0.24,,,,,,50105,50106,,,,2001,,POLE
+TX-50120,Pole 50120,transformer,FDR-1202,SUB-12,A,12.47,,,,25,7.2,0.24,,,,,,50107,50108,,,,1983,,POLE
+TX-50214,Pad 50214,transformer,FDR-1202,SUB-12,ABC,12.47,,,,150,12.47,0.208,,,,,,50112,50113,,,,2019,,PAD
+UG-1201-01,UG-1201-01,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,650,1000 AL XLP,575,40101,40102,UG,,,,,
+UG-1201-02,UG-1201-02,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,420,1/0 AL XLP,175,40114,40115,UG,,,,,
+UG-1201-03,UG-1201-03,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,260,1/0 AL XLP,175,40115,40117,UG,,,,,
+UG-1201-04,UG-1201-04,line,FDR-1201,SUB-12,ABC,12.47,,,,,,,,,310,1/0 AL XLP,175,40142,40143,UG,,,,,
+UG-1202-01,UG-1202-01,line,FDR-1202,SUB-12,ABC,12.47,,,,,,,,,540,1000 AL XLP,575,50101,50102,UG,,,,,
+UG-1202-02,UG-1202-02,line,FDR-1202,SUB-12,ABC,12.47,,,,,,,,,280,1/0 AL XLP,175,50111,50112,UG,,,,,
