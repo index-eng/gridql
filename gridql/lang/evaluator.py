@@ -17,7 +17,7 @@ from typing import Any, Iterator, Mapping
 
 from ..errors import GridQLError, GridQLNameError, UnitError
 from ..model import MISSING, GridObject, Network
-from ..model.types import attribute_universe, canonical_unit, class_for, resolve_type
+from ..model.types import attribute_universe, canonical_unit, class_for, plural, resolve_type
 from ..units import convert
 from .ast import (
     And,
@@ -227,11 +227,13 @@ def evaluate(network: Network, query: Query) -> Result:
 
     # Taken from every candidate, not only the ones topology kept, so a
     # utility's own column is known even where this slice lacks it.
-    known = _known_attributes(type_key, candidates)
-    select = _projection(query, type_key, known, distances)
+    vocabulary = _Vocabulary(
+        type_key, _known_attributes(type_key, candidates), network.source, len(candidates)
+    )
+    select = _projection(query, vocabulary, distances)
 
     if query.where is not None:
-        context = _Context(network, known, distances)
+        context = _Context(network, vocabulary.names, distances)
         objects = [obj for obj in objects if _test(query.where, obj, context)]
 
     if query.is_aggregate:
@@ -288,10 +290,42 @@ def _known_attributes(type_key: str, candidates: list[GridObject]) -> frozenset[
     )
 
 
+@dataclass(frozen=True)
+class _Vocabulary:
+    """The attribute names a query may use, and enough context to refuse one well."""
+
+    type_key: str
+    names: frozenset[str]
+    #: Where the network came from, as its loader described it.
+    source: str | None
+    candidates: int
+
+    def check(self, name: str) -> None:
+        """Refuse a name no candidate has, saying which data was searched.
+
+        Whether a utility's own column exists depends on the data loaded,
+        so "not an attribute" alone reads as a limit of the language when
+        the real answer is usually "not in this dataset".
+        """
+        if name.lower() in self.names:
+            return
+        where = self.source or "this network"
+        if self.candidates:
+            message = f"'{name}' is not an attribute of any {self.type_key} in {where}"
+        else:
+            message = (
+                f"'{name}' is not one of GridQL's {self.type_key} attributes, and "
+                f"{where} has no {plural(self.type_key)} to carry one of its own"
+            )
+        raise GridQLNameError(
+            message,
+            tuple(difflib.get_close_matches(name.lower(), self.names, n=3, cutoff=0.5)),
+        )
+
+
 def _projection(
     query: Query,
-    type_key: str,
-    known: frozenset[str],
+    vocabulary: _Vocabulary,
     distances: dict[str, int] | None = None,
 ) -> tuple[SelectItem, ...] | None:
     """The effective SELECT list, with GROUP BY's default filled in and checked."""
@@ -318,13 +352,13 @@ def _projection(
     # A misspelt attribute in WHERE would otherwise match nothing and look
     # exactly like a real empty answer.
     for attribute in _tested(query.where):
-        _check_attribute(attribute, known, type_key)
+        vocabulary.check(attribute)
     for column in query.group_by or ():
-        _check_attribute(column, known, type_key)
+        vocabulary.check(column)
     grouped = {column.lower() for column in query.group_by or ()}
     for key in query.order_by or ():
         if key.item.attribute != "*":
-            _check_attribute(key.item.attribute, known, type_key)
+            vocabulary.check(key.item.attribute)
         if key.item.is_aggregate and not query.is_aggregate:
             raise GridQLError(
                 f"ORDER BY {key.item.written} needs an aggregate query; "
@@ -351,7 +385,7 @@ def _projection(
 
     for item in select:
         if item.attribute != "*":
-            _check_attribute(item.attribute, known, type_key)
+            vocabulary.check(item.attribute)
 
     if query.is_aggregate:
         grouped = {column.lower() for column in query.group_by or ()}
@@ -363,15 +397,6 @@ def _projection(
                 )
 
     return select
-
-
-def _check_attribute(name: str, known: frozenset[str], type_key: str) -> None:
-    if name.lower() in known:
-        return
-    raise GridQLNameError(
-        f"'{name}' is not an attribute of {type_key}",
-        tuple(difflib.get_close_matches(name.lower(), known, n=3, cutoff=0.5)),
-    )
 
 
 # -- aggregation --------------------------------------------------------

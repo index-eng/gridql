@@ -167,7 +167,7 @@ def read_csv(
             raise CsvError("a mapping names its own files; set file = ... in the mapping instead")
         tables = _mapped_tables(source, mapping, report)
 
-    network = Network()
+    network = Network(source=str(source))
 
     for row in tables["substations"]:
         _add_substation(network, row, report)

@@ -307,7 +307,11 @@ def network_for(
         return read_csv(csv, mapping or (config.mapping if config else None)).network
     if db:
         return load_network(db)
-    return build_sample_network()
+    network = build_sample_network()
+    # Said where the network is named, so an error about what it lacks
+    # explains why this data and not the user's own.
+    network.source += ", used because no --db, --csv or project dataset was given"
+    return network
 
 
 def source_of(db: str | None, csv: str | None, config: Config | None = None) -> str:

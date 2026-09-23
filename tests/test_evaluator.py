@@ -1,7 +1,12 @@
+import contextlib
+import io
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from gridql import build_sample_network, execute, render
+from gridql import Network, build_sample_network, execute, read_csv, render
+from gridql.cli import main
 from gridql.errors import GridQLNameError, UnitError
 
 
@@ -233,6 +238,65 @@ class UtilityColumnTests(unittest.TestCase):
     def test_equipment_lacking_the_column_on_the_right_does_not_match(self):
         del self.network.get("XFMR-001").extras["customer_count"]
         self.assertEqual(self.run_query("FIND transformers WHERE kva > customer_count"), ["XFMR-002"])
+
+
+class MissingAttributeMessageTests(unittest.TestCase):
+    """A name no candidate has is refused, saying which data was searched."""
+
+    def message(self, network, source):
+        with self.assertRaises(GridQLNameError) as raised:
+            execute(network, source)
+        return str(raised.exception)
+
+    def test_the_sample_network_is_named(self):
+        message = self.message(build_sample_network(), "FIND transformers WHERE install_year > 1990")
+        self.assertEqual(
+            message,
+            "'install_year' is not an attribute of any transformer in the bundled sample network FDR-104",
+        )
+
+    def test_a_near_miss_still_gets_its_suggestion(self):
+        message = self.message(build_sample_network(), "FIND transformers WHERE kvaa > 1")
+        self.assertTrue(message.endswith("FDR-104. Did you mean: kva?"), message)
+
+    def test_a_network_built_in_python_is_this_network(self):
+        network = Network()
+        network.add_feeder("F").add_breaker("B")
+        self.assertIn("any breaker in this network", self.message(network, "FIND breakers SELECT age"))
+
+    def test_a_type_with_nothing_loaded_says_so(self):
+        message = self.message(build_sample_network(), "FIND capacitors WHERE install_year > 1")
+        self.assertIn("the bundled sample network FDR-104 has no capacitors", message)
+
+    def test_every_loader_names_its_file(self):
+        from gridql import load_network, read_cim, save_network, write_csv
+        from gridql.cim import export_network
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            sample = build_sample_network()
+            save_network(sample, base / "grid.sqlite")
+            write_csv(sample, base / "csv")
+            export_network(sample, path=base / "grid.xml")
+            for network, name in (
+                (load_network(base / "grid.sqlite"), "grid.sqlite"),
+                (read_csv(base / "csv").network, "csv"),
+                (read_cim(base / "grid.xml").network, "grid.xml"),
+            ):
+                with self.subTest(name=name):
+                    message = self.message(network, "FIND transformers WHERE install_year > 1")
+                    self.assertIn(f"in {base / name}", message)
+
+    def test_the_command_line_says_why_it_used_the_sample(self):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = main(["--no-config", "FIND transformers WHERE install_year > 1990"])
+        self.assertEqual(code, 1)
+        self.assertIn(
+            "the bundled sample network FDR-104, used because no --db, --csv or project "
+            "dataset was given",
+            err.getvalue(),
+        )
 
 
 if __name__ == "__main__":

@@ -244,7 +244,7 @@ def load_network(source: str | Path | sqlite3.Connection) -> Network:
     connection = connect(source) if owned else source
     try:
         _check_version(connection)
-        network = Network()
+        network = Network(source=str(source) if owned else None)
 
         for row in connection.execute("SELECT * FROM substations ORDER BY mrid"):
             network.add_substation(

@@ -28,7 +28,10 @@ from .feeder import Feeder, Substation
 class Network:
     """An in-memory electric network: objects plus a connectivity graph."""
 
-    def __init__(self) -> None:
+    def __init__(self, source: str | None = None) -> None:
+        #: Where the network came from -- a file, or the bundled sample --
+        #: so a message about what it lacks can say which data was searched.
+        self.source = source
         self.objects: dict[str, GridObject] = {}
         self._adjacency: dict[str, set[str]] = {}
         self._topology: _Topology | None = None

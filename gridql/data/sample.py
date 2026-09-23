@@ -29,7 +29,7 @@ from ..model import Network
 
 def build_sample_network() -> Network:
     """Build the sample distribution feeder FDR-104."""
-    network = Network()
+    network = Network(source="the bundled sample network FDR-104")
     network.add_substation("SUB-001", name="Oakdale", voltage="13.8kV")
 
     feeder = network.add_feeder(

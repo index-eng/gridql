@@ -84,7 +84,9 @@ def import_network(source: str | Path) -> Network:
 
 def read_cim(source: str | Path) -> CimDocument:
     """Read a CIM file, returning the network and a report on what was found."""
-    return _parse(_read_text(source))
+    document = _parse(_read_text(source))
+    document.network.source = str(source)
+    return document
 
 
 def loads_cim(text: str) -> CimDocument:
