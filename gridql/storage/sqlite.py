@@ -332,16 +332,34 @@ def _build_device(row: sqlite3.Row, extensions: dict[str, dict[str, Any]]) -> De
 
 def object_counts(source: str | Path | sqlite3.Connection) -> dict[str, int]:
     """Row counts per table, for a quick look at what a database holds."""
+    return _peek(
+        source,
+        lambda connection: {
+            table: connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+            for table in ("substations", "feeders", "devices", "connections")
+        },
+    )
+
+
+def feeder_ids(source: str | Path | sqlite3.Connection) -> list[str]:
+    """The mRIDs of the feeders a database holds, without loading the network."""
+    return _peek(
+        source,
+        lambda connection: [
+            row[0] for row in connection.execute("SELECT mrid FROM feeders ORDER BY mrid")
+        ],
+    )
+
+
+def _peek(source: str | Path | sqlite3.Connection, read):
+    """Run a read-only look at a database that must already exist."""
     owned = not isinstance(source, sqlite3.Connection)
     # Checked first: sqlite3.connect would create the file it was asked to read.
     if owned and not Path(source).exists():  # type: ignore[arg-type]
         raise StorageError(f"no such database: {source}")
     connection = connect(source) if owned else source
     try:
-        return {
-            table: connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-            for table in ("substations", "feeders", "devices", "connections")
-        }
+        return read(connection)
     except sqlite3.Error as error:
         raise StorageError(f"could not read {source}: {error}") from error
     finally:

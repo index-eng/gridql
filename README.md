@@ -595,6 +595,35 @@ save_network(build_sample_network(), "grid.sqlite")
 network = load_network("grid.sqlite")          # the NetworkLoader
 ```
 
+**Refreshing.** A database is replaced whole, never merged: import the new export over it with
+`--force`, and equipment that is not in the new data is gone. The replacement is one transaction,
+so a save that fails leaves the old data in place.
+
+```bash
+gridql import-csv ./gis-export                               # look first: nothing is saved
+gridql import-csv ./gis-export --db grid.sqlite --force      # then replace
+gridql init grid.sqlite --empty --force                      # or clear it to an empty schema
+```
+
+Because a bad export — truncated, filtered to one circuit, broken — would otherwise swap good data
+for less of it, `import-csv` and `import-cim` check before they replace a database, and leave it as
+it was if
+
+- validation finds errors in the new data,
+- the new data has more than 10% fewer devices than the database, or
+- a feeder in the database is missing from the new data.
+
+```
+error: not saved: grid.sqlite was left as it was, because
+  - it would replace 11 devices with 2, 82% fewer
+Check the new data, or pass --skip-checks to replace it anyway.
+```
+
+The import report still prints, so the reason is in front of you. When the change is intended — a
+feeder retired, a region split off — `--skip-checks` replaces it anyway. A refresh that passes says
+what it replaced: `saved to grid.sqlite (was 11 devices, now 10)`. Writing a new database is never
+checked, since there is nothing to lose, and neither is `save_network()` from Python.
+
 **Schema.** Class-table inheritance, as sketched in `idea.md`: every piece of equipment has a row
 in `devices`, and types with extra attributes have a matching row in an extension table keyed by
 the same mRID (`transformers`, `switches`, `lines`, `loads`, `capacitors`), plus `substations`,

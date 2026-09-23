@@ -20,8 +20,8 @@ from .model.types import class_for
 from .cim import export_network, export_summary, read_cim
 from .ingest import read_csv, write_csv
 from .script import read_script
-from .storage import load_network, object_counts, save_network
-from .validate import validate
+from .storage import StorageError, feeder_ids, load_network, object_counts, save_network
+from .validate import ValidationReport, validate
 
 COPYRIGHT = "Copyright (C) 2026 Index Labs, LLC"
 
@@ -425,6 +425,11 @@ def build_import_csv_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force", action="store_true", help="overwrite the database if it already exists"
     )
+    parser.add_argument(
+        "--skip-checks",
+        action="store_true",
+        help="replace an existing database even when the refresh checks object",
+    )
     _add_mapping_argument(parser)
     _add_config_arguments(parser)
     return parser
@@ -449,13 +454,16 @@ def import_csv(
     force: bool = False,
     mapping: str | None = None,
     config: Config | None = None,
+    skip_checks: bool = False,
 ) -> str:
     """Read CSV files and report what they held -- the way to try out a mapping."""
     document = read_csv(path, mapping or (config.mapping if config else None))
     lines = [document.report.summary()]
 
     report = validate(document.network)
-    where = f" --db {db}" if db else f" --csv {path}" + (f" --mapping {mapping}" if mapping else "")
+    # Point at the files just read, not the database: a refused save leaves
+    # the database holding the old data.
+    where = f" --csv {path}" + (f" --mapping {mapping}" if mapping else "")
     lines.append(
         "validation: no problems found"
         if not report
@@ -463,10 +471,7 @@ def import_csv(
     )
 
     if db is not None:
-        if Path(db).exists() and not force:
-            raise GridQLError(f"{db} already exists; pass --force to overwrite it")
-        save_network(document.network, db)
-        lines.append(f"saved to {db}")
+        _save_import(document.network, report, db, force, skip_checks, lines)
 
     return "\n".join(lines)
 
@@ -517,6 +522,11 @@ def build_import_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--force", action="store_true", help="overwrite the database if it already exists"
+    )
+    parser.add_argument(
+        "--skip-checks",
+        action="store_true",
+        help="replace an existing database even when the refresh checks object",
     )
     return parser
 
@@ -580,30 +590,117 @@ def export_cim(
     )
 
 
-def import_cim(path: str, db: str | None = None, force: bool = False) -> str:
+def import_cim(
+    path: str, db: str | None = None, force: bool = False, skip_checks: bool = False
+) -> str:
     document = read_cim(path)
     lines = [document.report.summary()]
 
     report = validate(document.network)
     if not report:
         lines.append("validation: no problems found")
-    elif db is not None:
-        lines.append(
-            f"validation: {report.counts()} -- run 'gridql validate --db {db}' for detail"
-        )
     else:
-        # 'gridql validate' cannot read a CIM file, so pointing there would
-        # validate some other network. Show the findings here instead.
+        # 'gridql validate' cannot read a CIM file, and --db may still hold
+        # the old data if the save is refused. Show the findings here instead.
         lines.append(f"validation: {report.counts()}")
         lines.extend(f"  {finding}" for finding in report.errors + report.warnings)
 
     if db is not None:
-        if Path(db).exists() and not force:
-            raise GridQLError(f"{db} already exists; pass --force to overwrite it")
-        save_network(document.network, db)
-        lines.append(f"saved to {db}")
+        _save_import(document.network, report, db, force, skip_checks, lines)
 
     return "\n".join(lines)
+
+
+#: A refresh that would drop more than this share of the equipment already
+#: stored is refused unless --skip-checks says the drop is intended.
+SHRINK_LIMIT = 0.10
+
+
+class SaveRefused(GridQLError):
+    """An import was read but not saved. ``output`` is its report, still worth showing."""
+
+    def __init__(self, message: str, output: str) -> None:
+        super().__init__(message)
+        self.output = output
+
+
+def _save_import(
+    network: Network,
+    report: ValidationReport,
+    db: str,
+    force: bool,
+    skip_checks: bool,
+    lines: list[str],
+) -> None:
+    """Save an imported network, guarding a database it would replace.
+
+    A new database has nothing to lose. Replacing one is a refresh, and a
+    refresh from a bad export -- truncated, filtered to one circuit, broken
+    -- would otherwise swap good data for less of it, with a warning at most.
+    """
+    if not Path(db).exists():
+        save_network(network, db)
+        lines.append(f"saved to {db}")
+        return
+    if not force:
+        raise GridQLError(f"{db} already exists; pass --force to overwrite it")
+
+    if skip_checks:
+        save_network(network, db)
+        lines.append(f"saved to {db}")
+        return
+
+    reasons, before = refresh_risks(network, report, db)
+    if reasons:
+        raise SaveRefused(
+            "\n".join(
+                [f"not saved: {db} was left as it was, because"]
+                + [f"  - {reason}" for reason in reasons]
+                + ["Check the new data, or pass --skip-checks to replace it anyway."]
+            ),
+            "\n".join(lines),
+        )
+    save_network(network, db)
+    lines.append(f"saved to {db} (was {before} devices, now {len(network.devices)})")
+
+
+def refresh_risks(
+    network: Network, report: ValidationReport, db: str
+) -> tuple[list[str], int | None]:
+    """Why replacing ``db`` with ``network`` looks like a mistake, if it does.
+
+    Returns the reasons, and how many devices the database held.
+    """
+    try:
+        before = object_counts(db)["devices"]
+        stored_feeders = feeder_ids(db)
+    except StorageError as error:
+        return [f"it could not be read to compare against ({error})"], None
+
+    reasons: list[str] = []
+    if report.errors:
+        shown = "; ".join(f"{f.code}: {f.message}" for f in report.errors[:3])
+        more = f"; and {len(report.errors) - 3} more" if len(report.errors) > 3 else ""
+        reasons.append(
+            f"validation found {len(report.errors)} "
+            f"error{'s' if len(report.errors) != 1 else ''}: {shown}{more}"
+        )
+
+    now = len(network.devices)
+    if before and now < before * (1 - SHRINK_LIMIT):
+        reasons.append(
+            f"it would replace {before} devices with {now}, "
+            f"{round(100 * (before - now) / before)}% fewer"
+        )
+
+    missing = sorted(set(stored_feeders) - {feeder.mrid for feeder in network.feeders})
+    if missing:
+        shown = ", ".join(missing[:5]) + (f" and {len(missing) - 5} more" if len(missing) > 5 else "")
+        reasons.append(
+            f"{len(missing)} feeder{'s' if len(missing) != 1 else ''} in the database "
+            f"{'are' if len(missing) != 1 else 'is'} not in the new data: {shown}"
+        )
+    return reasons, before
 
 
 def repl(
@@ -684,6 +781,10 @@ def _emit(produce) -> int:
         print(error.render(), file=sys.stderr)
         return 1
     except GridQLError as error:
+        # A refused save still read its input; what it found is the evidence.
+        output = getattr(error, "output", None)
+        if output:
+            print(output)
         print(f"error: {error}", file=sys.stderr)
         return 1
     return 0
@@ -712,7 +813,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "import-csv":
         args = build_import_csv_parser().parse_args(argv[1:])
         return _emit(
-            lambda: import_csv(args.path, args.db, args.force, args.mapping, _config(args))
+            lambda: import_csv(
+                args.path, args.db, args.force, args.mapping, _config(args), args.skip_checks
+            )
         )
 
     if argv and argv[0] == "export-csv":
@@ -731,7 +834,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if argv and argv[0] == "import-cim":
         args = build_import_parser().parse_args(argv[1:])
-        return _emit(lambda: import_cim(args.path, args.db, args.force))
+        return _emit(lambda: import_cim(args.path, args.db, args.force, args.skip_checks))
 
     if argv and argv[0] == "run":
         return _emit(lambda: _run(argv[1:]))

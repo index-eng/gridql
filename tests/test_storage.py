@@ -10,6 +10,7 @@ from pathlib import Path
 
 from gridql import Network, build_sample_network, execute
 from gridql.cli import main
+from gridql.ingest import write_csv
 from gridql.storage import (
     SCHEMA_VERSION,
     StorageError,
@@ -294,6 +295,119 @@ class CommandLineTests(StorageTestCase):
         code, _, err = self.run_cli(["--db", str(self.directory / "nope.sqlite"), "FIND feeders"])
         self.assertEqual(code, 1)
         self.assertIn("no such database", err)
+
+
+class RefreshTests(StorageTestCase):
+    """Replacing a database with a new import: a refresh must not lose data by accident."""
+
+    def setUp(self):
+        super().setUp()
+        save_network(self.network, self.path)
+        self.export = self.directory / "export"
+        write_csv(self.network, self.export)
+
+    def run_cli(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def refresh(self, *flags):
+        return self.run_cli(
+            ["import-csv", str(self.export), "--db", str(self.path), "--force", "--no-config", *flags]
+        )
+
+    def devices_stored(self):
+        return len(load_network(self.path).devices)
+
+    def keep_rows(self, predicate):
+        """Rewrite the export's devices.csv keeping only some rows."""
+        path = self.export / "devices.csv"
+        header, *rows = path.read_text().splitlines()
+        path.write_text("\n".join([header, *(row for row in rows if predicate(row))]) + "\n")
+
+    def test_a_like_for_like_refresh_says_what_it_replaced(self):
+        code, out, _ = self.refresh()
+        self.assertEqual(code, 0)
+        self.assertIn("(was 11 devices, now 11)", out)
+
+    def test_a_truncated_export_is_refused_and_the_database_kept(self):
+        self.keep_rows(lambda row: row.startswith(("BRK", "LN-001")))
+        code, out, err = self.refresh()
+        self.assertEqual(code, 1)
+        self.assertIn("replace 11 devices with 2, 82% fewer", err)
+        self.assertIn("--skip-checks", err)
+        self.assertIn("loaded 2 devices", out)  # the report still shows what was read
+        self.assertEqual(self.devices_stored(), 11)
+
+    def test_a_small_change_is_an_ordinary_refresh(self):
+        self.keep_rows(lambda row: not row.startswith("LOAD-002"))  # one device of 11
+        code, out, _ = self.refresh()
+        self.assertEqual(code, 0)
+        self.assertIn("(was 11 devices, now 10)", out)
+
+    def test_a_missing_feeder_is_refused_even_when_the_count_holds(self):
+        extra = Network()
+        feeder = extra.add_feeder("FDR-200")
+        feeder.add_breaker("BRK-200")
+        network = build_sample_network()
+        network.add_feeder("FDR-200")
+        network.add(dataclasses.replace(extra.get("BRK-200"), feeder="FDR-200"))
+        save_network(network, self.path)  # the database knows two feeders; the export one
+        code, _, err = self.refresh()
+        self.assertEqual(code, 1)
+        self.assertIn("1 feeder in the database is not in the new data: FDR-200", err)
+        self.assertEqual(len(load_network(self.path).feeders), 2)
+
+    def test_validation_errors_are_refused(self):
+        path = self.export / "devices.csv"
+        path.write_text(path.read_text().replace("OPEN,OPEN,true", "AJAR,OPEN,true"))
+        code, _, err = self.refresh()
+        self.assertEqual(code, 1)
+        self.assertIn("validation found 1 error: invalid-state", err)
+
+    def test_skip_checks_replaces_it_anyway(self):
+        self.keep_rows(lambda row: row.startswith("BRK"))
+        code, out, _ = self.refresh("--skip-checks")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.devices_stored(), 1)
+
+    def test_a_new_database_has_nothing_to_protect(self):
+        self.path.unlink()
+        self.keep_rows(lambda row: row.startswith("BRK"))
+        code, _, _ = self.refresh()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.devices_stored(), 1)
+
+    def test_a_file_that_cannot_be_compared_against_is_refused(self):
+        self.path.unlink()
+        sqlite3.connect(self.path).close()  # an empty file, not a GridQL database
+        code, _, err = self.refresh()
+        self.assertEqual(code, 1)
+        self.assertIn("could not be read to compare against", err)
+
+    def test_the_validation_hint_points_at_the_new_data_not_the_database(self):
+        # After a refused save the database still holds the old network.
+        path = self.export / "devices.csv"
+        path.write_text(path.read_text().replace("OPEN,OPEN,true", "AJAR,OPEN,true"))
+        _, out, _ = self.refresh()
+        self.assertIn(f"gridql validate --csv {self.export}", out)
+        self.assertNotIn("validate --db", out)
+
+    def test_import_cim_is_guarded_the_same_way(self):
+        from gridql.cim import export_network
+
+        xml = self.directory / "slice.xml"
+        lateral = build_sample_network()
+        export_network(lateral, execute(lateral, 'FIND devices FED BY "SW-002"').objects, xml)
+        code, _, err = self.run_cli(["import-cim", str(xml), "--db", str(self.path), "--force"])
+        self.assertEqual(code, 1)
+        self.assertIn("replace 11 devices with", err)
+        code, _, _ = self.run_cli(
+            ["import-cim", str(xml), "--db", str(self.path), "--force", "--skip-checks"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(self.devices_stored(), 3)
 
 
 if __name__ == "__main__":

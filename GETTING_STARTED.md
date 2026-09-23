@@ -523,6 +523,28 @@ A network saved and reloaded comes back identical — same objects, same connect
 heads. Loading reads everything once and keeps the graph in memory, so topology queries stay fast
 walks rather than recursive SQL.
 
+To refresh a database from a new export, import over it with `--force`. It is replaced whole, not
+merged, so it is worth looking at the export before it replaces anything:
+
+```bash
+gridql import-csv ./gis-export                            # read and validate; saves nothing
+gridql import-csv ./gis-export --db grid.sqlite --force   # replace the database with it
+gridql init grid.sqlite --empty --force                   # or clear it out entirely
+```
+
+GridQL also checks for you. It refuses to replace a database — and leaves it untouched — when the
+new data has validation errors, has more than 10% fewer devices, or is missing a feeder the
+database has, since those are what a truncated or wrongly filtered export looks like:
+
+```
+error: not saved: grid.sqlite was left as it was, because
+  - it would replace 11 devices with 2, 82% fewer
+Check the new data, or pass --skip-checks to replace it anyway.
+```
+
+If the change is real — a feeder retired, say — add `--skip-checks`. The same applies to
+`import-cim`.
+
 ### CIM import and export
 
 ```bash
