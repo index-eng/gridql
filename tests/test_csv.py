@@ -3,6 +3,7 @@
 import contextlib
 import dataclasses
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -413,6 +414,78 @@ class CommandLineTests(CsvTestCase):
         code, _, err = self.run_cli(["--csv", str(self.directory / "nope"), "FIND feeders"])
         self.assertEqual(code, 1)
         self.assertIn("error:", err)
+
+
+class LoadWarningTests(CsvTestCase):
+    """A query shows only its answer, so a bad load has to say so on the side."""
+
+    def run_cli(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main([*argv, "--no-config"])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_file_that_loads_nothing_says_so_and_why(self):
+        path = self.write("TRANSFORMER.csv", "FACILITY_ID,KVA_RATING\nX1,500\nX2,75\n")
+        code, out, err = self.run_cli(["--csv", str(path), "FIND devices"])
+        self.assertEqual(code, 0)  # the query still runs
+        self.assertIn("no devices matched", out)
+        self.assertIn(
+            f"warning: no equipment loaded from {path}: 2 rows skipped or incomplete, "
+            "starting with TRANSFORMER.csv:2: no mRID",
+            err,
+        )
+        self.assertIn(f"run 'gridql import-csv {path}' for the full report", err)
+
+    def test_skipped_rows_are_counted_and_the_answer_still_shown(self):
+        self.write("devices.csv", "mrid,type\n,breaker\nB1,breaker\n")
+        code, out, err = self.run_cli(["--csv", str(self.directory), "FIND breakers"])
+        self.assertEqual(code, 0)
+        self.assertIn("B1", out)
+        self.assertIn(f"1 row skipped or incomplete in {self.directory}", err)
+
+    def test_the_report_command_carries_the_mapping(self):
+        mapping = self.write("m.toml", '[[devices]]\nfile = "SW.csv"\nmrid = "ID"\n')
+        self.write("SW.csv", "ID,X\n,1\nA,2\n")
+        _, _, err = self.run_cli(
+            ["--csv", str(self.directory), "--mapping", str(mapping), "FIND devices"]
+        )
+        self.assertIn(f"import-csv {self.directory} --mapping {mapping}", err)
+
+    def test_a_clean_load_is_quiet(self):
+        write_csv(build_sample_network(), self.directory)
+        _, _, err = self.run_cli(["--csv", str(self.directory), "FIND devices"])
+        self.assertEqual(err, "")
+
+
+class QueryAsPathTests(CsvTestCase):
+    def run_cli(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main([*argv, "--no-config"])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_query_given_to_csv_explains_the_order(self):
+        code, _, err = self.run_cli(["--csv", "find transformer where install_year > 1990"])
+        self.assertEqual(code, 1)
+        self.assertIn("--csv takes the folder holding your CSV files, but was given the query", err)
+        self.assertIn("gridql --csv ./gis-export 'find transformer where install_year > 1990'", err)
+
+    def test_the_same_for_db_and_mapping(self):
+        for option, what in (("--db", "a database file"), ("--mapping", "a mapping file")):
+            with self.subTest(option=option):
+                code, _, err = self.run_cli([option, "FIND feeders"])
+                self.assertEqual(code, 1)
+                self.assertIn(f"{option} takes {what}, but was given the query", err)
+
+    def test_a_folder_that_really_starts_with_find_is_read(self):
+        write_csv(build_sample_network(), self.directory / "find results")
+        previous = Path.cwd()
+        os.chdir(self.directory)
+        self.addCleanup(os.chdir, previous)
+        code, out, _ = self.run_cli(["--csv", "find results", "FIND reclosers"])
+        self.assertEqual(code, 0)
+        self.assertIn("REC-001", out)
 
 
 if __name__ == "__main__":

@@ -505,6 +505,14 @@ loaded 6 devices, 1 feeders, 0 substations, 4 connections
   connections.csv:6: unknown device 'GHOST-99'
 ```
 
+That is what `import-csv` prints. A query run with `--csv` shows only its answer, so when the load
+skipped rows or found no equipment at all, it says so on stderr first and points at the report:
+
+```
+warning: no equipment loaded from ./export/TRANSFORMER.csv: 2 rows skipped or incomplete, starting with TRANSFORMER.csv:2: no mRID
+  run 'gridql import-csv ./export/TRANSFORMER.csv' for the full report
+```
+
 Feeders and substations are created from whatever the devices refer to, and a feeder carrying
 exactly one breaker gets it as the head — with anything less clear reported rather than guessed,
 the same rule CIM import uses.

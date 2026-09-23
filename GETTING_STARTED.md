@@ -371,7 +371,9 @@ A `devices.csv` is all that is strictly required; `connections.csv`, `feeders.cs
 `substations.csv` are optional. Column names are matched loosely (`OBJECTID`, `Device Type`,
 `Circuit`, `kV` all work), cells may carry units (`12470 V`, `0.5MVA`), and any column GridQL does
 not recognise is kept as a queryable attribute rather than dropped. Bad rows are reported with
-their line number instead of stopping the load. See [`examples/csv/`](examples/csv/) for the shape.
+their line number instead of stopping the load. A query still runs when that happens, but warns
+first — so an empty answer caused by rows that never loaded does not look like a real one. See
+[`examples/csv/`](examples/csv/) for the shape.
 
 The columns GridQL looks for, under whatever spelling your export uses:
 

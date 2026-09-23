@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 from pathlib import Path
 
@@ -297,6 +298,8 @@ def network_for(
     inside a project directory. Its mapping describes the utility's export
     format, so it applies to any CSV read here unless --mapping names another.
     """
+    for option, value in (("--csv", csv), ("--db", db), ("--mapping", mapping)):
+        _refuse_query_as_path(option, value)
     if db and csv:
         raise GridQLError("pass either --db or --csv, not both")
     if not db and not csv and config is not None:
@@ -304,7 +307,10 @@ def network_for(
     if mapping and not csv:
         raise GridQLError("--mapping says what CSV columns mean; use it with --csv")
     if csv:
-        return read_csv(csv, mapping or (config.mapping if config else None)).network
+        mapping = mapping or (config.mapping if config else None)
+        document = read_csv(csv, mapping)
+        _warn_about_load(document, csv, mapping)
+        return document.network
     if db:
         return load_network(db)
     network = build_sample_network()
@@ -312,6 +318,59 @@ def network_for(
     # explains why this data and not the user's own.
     network.source += ", used because no --db, --csv or project dataset was given"
     return network
+
+
+#: What each dataset option takes, and an example of it, for the message
+#: that catches a query given in its place.
+_DATASET_OPTIONS = {
+    "--csv": ("the folder holding your CSV files", "./gis-export"),
+    "--db": ("a database file", "grid.sqlite"),
+    "--mapping": ("a mapping file", "gis-export.toml"),
+}
+
+
+def _refuse_query_as_path(option: str, value: str | None) -> None:
+    """Catch ``--csv "FIND ..."``: the option took the query as its path.
+
+    Left alone it fails as "no device file at find transformers ...", which
+    names the symptom and hides the cause -- the path is missing and the
+    query was swallowed.
+    """
+    if not value or Path(value).exists():
+        return
+    words = value.split(maxsplit=1)
+    if not words or words[0].upper() != "FIND":
+        return
+    what, example = _DATASET_OPTIONS[option]
+    raise GridQLError(
+        f"{option} takes {what}, but was given the query. Put the path first, then the "
+        f"query: gridql {option} {example} {shlex.quote(value)}"
+    )
+
+
+def _warn_about_load(document, csv: str, mapping: str | None) -> None:
+    """Say so on stderr when CSV files loaded badly, and still run the query.
+
+    A query shows only its answer, so without this a file whose every row
+    was skipped reads as "no transformers" -- a true statement about the
+    wrong problem. import-csv prints the whole report; this points at it.
+    """
+    report = document.report
+    if not report.problems and document.network.devices:
+        return
+    count = len(report.problems)
+    skipped = f"{count} row{'s' if count != 1 else ''} skipped or incomplete"
+    if not document.network.devices:
+        headline = f"no equipment loaded from {csv}" + (f": {skipped}" if count else "")
+    else:
+        headline = f"{skipped} in {csv}"
+    if count:
+        headline += f", starting with {report.problems[0]}"
+    command = f"gridql import-csv {shlex.quote(csv)}" + (
+        f" --mapping {shlex.quote(mapping)}" if mapping else ""
+    )
+    print(f"warning: {headline}", file=sys.stderr)
+    print(f"  run '{command}' for the full report", file=sys.stderr)
 
 
 def source_of(db: str | None, csv: str | None, config: Config | None = None) -> str:
