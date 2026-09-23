@@ -27,6 +27,9 @@ database with nothing else to say::
     mapping  = "gis.toml"          # which tables hold what
     db       = "grid.sqlite"
 
+Queries answer from ``db``, the snapshot, and ``--live`` reads the database
+itself. Without a ``db`` or ``csv``, every query reads the database live.
+
 Paths resolve relative to the file, so the same config works from any
 subdirectory. Everything in it is a *default*: an explicit ``--db``, ``--csv``
 or ``--<param>`` on the command line wins.
@@ -66,6 +69,7 @@ class Config:
     #: Or, with ``postgres``, which of the database's tables hold what.
     mapping: str | None = None
     #: The database ``gridql import-postgres`` reads: a connection string.
+    #: Queried live when the project names no ``db`` or ``csv`` to prefer.
     postgres: str | None = None
 
     def __bool__(self) -> bool:
@@ -82,7 +86,12 @@ class Config:
             return _readable(self.db)
         if self.csv:
             return f"{_readable(self.csv)} (CSV)"
+        if self.postgres is not None:
+            return f"{self._postgres()} (Postgres, read live at each query)"
         return "the bundled sample network FDR-104"
+
+    def _postgres(self) -> str:
+        return redact(self.postgres or "") or "the database the PG* environment variables name"
 
     def describe(self) -> str:
         if self.path is None:
@@ -93,7 +102,8 @@ class Config:
             lines.append(f"project: {self.name}")
         lines.append(f"data:    {self.dataset()}")
         if self.postgres is not None:
-            lines.append(f"import:  {redact(self.postgres) or '(the PG* environment variables)'}")
+            if self.db or self.csv:
+                lines.append(f"import:  {self._postgres()} (--live to query it directly)")
             if has_password(self.postgres):
                 lines.append(
                     "         note: the password here can be read by anyone who can read "

@@ -382,7 +382,7 @@ name    = "Oakdale District"
 db      = "grid.sqlite"      # or: csv = "gis-export"
 queries = "queries"
 # mapping = "gis-export.toml"   what the CSV columns mean; see "Mapping a utility's own schema"
-# postgres = "service=gis"       the database import-postgres reads; see "Reading from Postgres"
+# postgres = "service=gis"       a Postgres database, queried live or imported; see "Reading from Postgres"
 
 [params]
 feeder = "FDR-104"
@@ -398,7 +398,7 @@ The file is TOML, found by walking up from the working directory the way git fin
 applies to a whole tree and the same commands work from any subdirectory. Paths resolve against
 the file rather than the caller.
 
-**Everything in it is a default.** An explicit `--db`, `--csv`, `--mapping` or `--<param>` wins; `--config PATH`
+**Everything in it is a default.** An explicit `--db`, `--csv`, `--postgres`, `--mapping` or `--<param>` wins; `--config PATH`
 names a different file, and `--no-config` ignores the search entirely — which is what a CI job
 wants when it points at a dataset of its own.
 
@@ -665,9 +665,9 @@ mapping that reads it back to exactly the same network.
 
 ### Reading from Postgres
 
-A GIS or asset database need not be exported first. `import-postgres` reads it through a mapping —
-the same format, with `table` where a CSV mapping has `file`, or a `query` for a join or a filter —
-and saves the network to SQLite for querying:
+A GIS or asset database need not be exported first. GridQL reads it through a mapping — the same
+format, with `table` where a CSV mapping has `file`, or a `query` for a join or a filter — and
+either queries it live or saves it to SQLite:
 
 ```toml
 [[devices]]
@@ -690,7 +690,8 @@ mrid  = "facility_id"
 
 ```bash
 pip install 'gridql[postgres]'                                                   # the psycopg driver
-gridql import-postgres postgresql://gis@gis-db/utility --mapping gis.toml       # try it
+gridql --postgres postgresql://gis@gis-db/utility --mapping gis.toml 'FIND fuses WHERE state = OPEN'
+gridql import-postgres postgresql://gis@gis-db/utility --mapping gis.toml       # what it made of it
 gridql import-postgres postgresql://gis@gis-db/utility --mapping gis.toml --db grid.sqlite
 ```
 
@@ -715,11 +716,24 @@ anywhere GridQL reads. A project names it with `postgres = "..."` next to its `m
 and `gridql import-postgres --db grid.sqlite --force` becomes the whole refresh, guarded by the same
 checks as any other: an import that would drop feeders or a tenth of the equipment is refused.
 
-Queries run against the saved snapshot rather than the live database. A query walks the
-connectivity graph, which means reading the whole network, and doing that for every question would
-load the production server for nothing. [`examples/postgres/`](examples/postgres/) holds the example
-feeders as typed tables in a `gis` schema, with customers in a separate `cis` one, and the mapping
-that imports them to exactly the network the CSV example gives.
+**Live or snapshot.** `--postgres` answers from the database as it is now: `gridql`, `run`,
+`validate`, `export-csv` and `export-cim` all take it. Tracing connectivity needs the whole network,
+so a live query reads every mapped table each time it runs — right for "which fuses are open right
+now?", wasteful for a batch of reports. For those, `import-postgres --db` saves a snapshot and
+queries read that. In the REPL the network is read once, and `.reload` reads it again.
+
+A project chooses with what it names. With `postgres` alone, every query reads the database live;
+with `db` beside it, queries answer from the snapshot, and `--live` reads the database for a
+question that cannot wait for the next refresh:
+
+```bash
+gridql 'FIND fuses WHERE state = OPEN'           # the snapshot in grid.sqlite
+gridql --live 'FIND fuses WHERE state = OPEN'    # the database, now
+```
+
+[`examples/postgres/`](examples/postgres/) holds the example feeders as typed tables in a `gis`
+schema, with customers in a separate `cis` one, and the mapping that reads them to exactly the
+network the CSV example gives.
 
 ## Persistence
 

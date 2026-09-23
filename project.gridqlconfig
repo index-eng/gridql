@@ -17,8 +17,9 @@ queries = "queries"
 #   csv = "gis-export"
 #   db  = "grid.sqlite"
 #
-# and, when the network lives in the utility's Postgres, at that too, so
-# 'gridql import-postgres --db grid.sqlite --force' refreshes the database:
+# and, when the network lives in the utility's Postgres, at that too. Alone,
+# it is queried live; beside a db, 'gridql import-postgres --db grid.sqlite
+# --force' refreshes that snapshot and --live reaches past it:
 #
 #   postgres = "service=gis"
 #   mapping  = "gis.toml"

@@ -151,7 +151,8 @@ example data it points at.
 
 `.help` lists the syntax, `.types` lists every type and the CIM class it maps to, `.config` shows
 the project settings in effect, `.run <file> [name=value ...]` runs a saved query, `.validate`
-checks the model, and `.quit` leaves.
+checks the model, `.reload` reads the data again — from a live database, what it holds now — and
+`.quit` leaves.
 
 ## The features, briefly
 
@@ -368,7 +369,7 @@ gridql 'FIND reclosers'   # against grid.sqlite, with no --db
 gridql run feeder_report  # a query by name, from anywhere in the tree
 ```
 
-Everything in it is a default: `--db`, `--csv`, `--mapping` and `--<param>` win, and `--no-config`
+Everything in it is a default: `--db`, `--csv`, `--postgres`, `--mapping` and `--<param>` win, and `--no-config`
 ignores it altogether. This repository has [one of its own](project.gridqlconfig), naming
 `examples/csv` as its data and `FDR-1201` as its usual feeder.
 
@@ -381,7 +382,7 @@ cannot tell where it came from, so nothing in a `.gridql` file depends on the so
 | --- | --- | --- |
 | CSV — a directory, or a single devices file | `--csv PATH` (with `--mapping FILE` for your own schema), `import-csv`, `load_csv()` | `write_csv()` |
 | SQLite — GridQL's own schema | `--db PATH`, `load_network()` | `init`, `save_network()` |
-| Postgres — a utility's own schema, through a mapping | `import-postgres`, `read_postgres()` | — |
+| Postgres — a utility's own schema, through a mapping | `--postgres DATABASE`, `import-postgres`, `read_postgres()` | — |
 | CIM RDF/XML | `import-cim`, `read_cim()` | `export-cim`, `RETURN cim` |
 | OpenDSS — a master `.dss` file and what it redirects to | `import-dss`, `read_dss()` | — |
 | Python objects | the `Network` builder API | — |
@@ -607,16 +608,33 @@ gridql import-postgres postgresql:///cedar_hill --mapping examples/postgres/mapp
 ```
 
 Without `--db` that is a trial run: it reports what it read, just as `import-csv` does, and saves
-nothing. Add `--db cedar-hill.sqlite` to keep it, then query that with `--db` as usual. Queries
-always run against a saved database rather than the live one, so asking questions never puts load
-on the production server.
+nothing. Once the report looks right, there are two ways to query it.
+
+**Live**, with `--postgres`, answers from the database as it is at that moment:
+
+```bash
+gridql --postgres postgresql:///cedar_hill --mapping examples/postgres/mapping.toml \
+    'FIND fuses WHERE state = OPEN'
+```
+
+Every query reads all the mapped tables, since tracing connectivity needs the whole network. That
+is the right trade for "what is open right now?" and the wrong one for a morning's worth of reports
+on a big system. In the REPL the network is read once when it starts; `.reload` reads it again.
+
+**From a snapshot**: add `--db cedar-hill.sqlite` to the import to keep what it read, then query
+that with `--db` as usual. It answers quickly and puts no load on the database, and it is only as
+current as the last import.
 
 The import only ever reads. It runs in one read-only transaction, which also means every table is
 read as it stood at the same moment, even while people are editing the GIS.
 
 The database is named by a URL (`postgresql://gis@gis-db/utility`) or a libpq string
 (`host=gis-db dbname=utility user=gis`, or `service=gis`). Keep the password out of it: libpq finds
-one in `~/.pgpass` or `PGPASSWORD`. A project records the rest, so a nightly refresh is one command:
+one in `~/.pgpass` or `PGPASSWORD`.
+
+A project records the rest. Name only `postgres` and `mapping`, and every query reads the database
+live. Add a `db` and queries answer from that snapshot instead, a nightly refresh is one command,
+and `--live` still reaches the database when a question cannot wait:
 
 ```toml
 postgres = "service=gis"
@@ -625,7 +643,9 @@ db       = "grid.sqlite"
 ```
 
 ```bash
-gridql import-postgres --db grid.sqlite --force
+gridql import-postgres --db grid.sqlite --force      # the nightly refresh
+gridql 'FIND fuses WHERE state = OPEN'               # from grid.sqlite
+gridql --live 'FIND fuses WHERE state = OPEN'        # from the database, now
 ```
 
 A refresh is refused, leaving the old database in place, when the new data would drop a feeder,

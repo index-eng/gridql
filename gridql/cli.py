@@ -23,6 +23,7 @@ from .model.types import class_for
 from .cim import export_network, export_summary, read_cim
 from .dss import read_dss
 from .ingest import read_csv, read_postgres, write_csv
+from .ingest.postgres import redact
 from .script import read_script
 from .storage import StorageError, feeder_ids, load_network, object_counts, save_network
 from .validate import ValidationReport, validate
@@ -72,7 +73,9 @@ A file may declare PARAM feeder = "FDR-104" and use $feeder; supply another
 with:  gridql run queries/foo.gridql --feeder FDR-201
 
 Commands:   .help  .types  .format <...>  .run <file> [name=value ...]
-            .config  .validate  .license  .quit"""
+            .reload  .config  .validate  .license  .quit
+
+.reload reads the data again -- from a live database, what it holds now."""
 
 _EPILOG = """examples:
   gridql 'FIND reclosers'
@@ -89,6 +92,7 @@ _EPILOG = """examples:
   gridql import-csv ./gis-export --db grid.sqlite
   gridql import-csv ./gis-export --mapping gis-export.toml
   gridql import-postgres postgresql://gis@gis-db/utility --mapping gis.toml --db grid.sqlite
+  gridql --postgres postgresql://gis@gis-db/utility --mapping gis.toml 'FIND switches WHERE state = OPEN'
 
 With no --db and no project.gridqlconfig, queries run against the bundled
 sample feeder FDR-104. Run 'gridql config' to see what is in effect."""
@@ -188,6 +192,8 @@ RUN_OPTIONS = {
     "--format": True,
     "--db": True,
     "--csv": True,
+    "--postgres": True,
+    "--live": False,
     "--config": True,
     "--mapping": True,
     "--param": True,
@@ -285,9 +291,25 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="query a directory of CSV files (or a single devices file) directly",
     )
+    _add_postgres_arguments(parser)
     _add_mapping_argument(parser)
     _add_config_arguments(parser)
     _add_color_argument(parser)
+
+
+def _add_postgres_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--postgres",
+        metavar="DATABASE",
+        default=None,
+        help="read the network live from this Postgres database, through --mapping: "
+        "a URL such as postgresql://gis@gis-db/utility, or service=gis",
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="read the Postgres database the project config names, not its saved snapshot",
+    )
 
 
 def _add_color_argument(parser: argparse.ArgumentParser) -> None:
@@ -305,7 +327,7 @@ def _add_mapping_argument(parser: argparse.ArgumentParser) -> None:
         "--mapping",
         metavar="PATH",
         default=None,
-        help="a TOML file saying what the CSV files' columns mean",
+        help="a TOML file saying what the CSV files' columns, or the database's tables, mean",
     )
 
 
@@ -328,6 +350,8 @@ def network_for(
     csv: str | None = None,
     config: Config | None = None,
     mapping: str | None = None,
+    postgres: str | None = None,
+    live: bool = False,
 ) -> Network:
     """The network a command runs against: a database, CSV files, or the sample.
 
@@ -335,19 +359,65 @@ def network_for(
     which is what lets ``gridql 'FIND feeders'`` mean the utility's own data
     inside a project directory. Its mapping describes the utility's export
     format, so it applies to any CSV read here unless --mapping names another.
+
+    ``postgres`` reads a utility's database live, through the mapping, each
+    time; ``live`` does so for the database the project names, passing over
+    the snapshot it keeps in ``db``. A project naming only a Postgres
+    database is read live by default.
     """
-    for option, value in (("--csv", csv), ("--db", db), ("--mapping", mapping)):
+    for option, value in (
+        ("--csv", csv), ("--db", db), ("--postgres", postgres), ("--mapping", mapping)
+    ):
         _refuse_query_as_path(option, value)
-    if db and csv:
-        raise GridQLError("pass either --db or --csv, not both")
-    if not db and not csv and config is not None:
+    chosen = [
+        option
+        for option, value in (("--db", db), ("--csv", csv), ("--postgres", postgres), ("--live", live))
+        if value
+    ]
+    if len(chosen) > 1:
+        raise GridQLError(f"pass either {chosen[0]} or {chosen[1]}, not both")
+
+    config = config or Config()
+    command = "gridql import-postgres" + (
+        f" {shlex.quote(redact(postgres))}" if postgres else ""
+    )
+    if live:
+        if config.postgres is None:
+            where = config.path.name if config.path else f"no {CONFIG_NAME}"
+            raise GridQLError(
+                f"--live reads the database a project names with postgres = \"...\", "
+                f"and {where} names none; name one with --postgres"
+            )
+        postgres = config.postgres
+    if not chosen:
         db, csv = config.db, config.csv
-    if mapping and not csv:
-        raise GridQLError("--mapping says what CSV columns mean; use it with --csv")
+        if not db and not csv:
+            postgres = config.postgres
+
+    if mapping and not csv and postgres is None:
+        raise GridQLError(
+            "--mapping says what CSV columns or database tables mean; "
+            "use it with --csv or --postgres"
+        )
+    if postgres is not None:
+        mapping = mapping or config.mapping
+        if mapping is None:
+            raise GridQLError(
+                "reading Postgres needs --mapping, or mapping = \"...\" in the project: "
+                "a mapping file says which tables hold what"
+            )
+        document = read_postgres(postgres, mapping)
+        _warn_about_load(document, document.network.source, f"{command} --mapping {shlex.quote(mapping)}")
+        return document.network
     if csv:
-        mapping = mapping or (config.mapping if config else None)
+        mapping = mapping or config.mapping
         document = read_csv(csv, mapping)
-        _warn_about_load(document, csv, mapping)
+        _warn_about_load(
+            document,
+            csv,
+            f"gridql import-csv {shlex.quote(csv)}"
+            + (f" --mapping {shlex.quote(mapping)}" if mapping else ""),
+        )
         return document.network
     if db:
         return load_network(db)
@@ -364,6 +434,7 @@ _DATASET_OPTIONS = {
     "--csv": ("the folder holding your CSV files", "./gis-export"),
     "--db": ("a database file", "grid.sqlite"),
     "--mapping": ("a mapping file", "gis-export.toml"),
+    "--postgres": ("a database to connect to", "postgresql://gis@gis-db/utility"),
 }
 
 
@@ -386,12 +457,13 @@ def _refuse_query_as_path(option: str, value: str | None) -> None:
     )
 
 
-def _warn_about_load(document, csv: str, mapping: str | None) -> None:
-    """Say so on stderr when CSV files loaded badly, and still run the query.
+def _warn_about_load(document, source: str, command: str) -> None:
+    """Say so on stderr when the data loaded badly, and still run the query.
 
     A query shows only its answer, so without this a file whose every row
     was skipped reads as "no transformers" -- a true statement about the
-    wrong problem. import-csv prints the whole report; this points at it.
+    wrong problem. ``command`` -- an import -- prints the whole report; this
+    points at it.
     """
     report = document.report
     if not report.problems and document.network.devices:
@@ -399,14 +471,11 @@ def _warn_about_load(document, csv: str, mapping: str | None) -> None:
     count = len(report.problems)
     skipped = f"{count} row{'s' if count != 1 else ''} skipped or incomplete"
     if not document.network.devices:
-        headline = f"no equipment loaded from {csv}" + (f": {skipped}" if count else "")
+        headline = f"no equipment loaded from {source}" + (f": {skipped}" if count else "")
     else:
-        headline = f"{skipped} in {csv}"
+        headline = f"{skipped} in {source}"
     if count:
         headline += f", starting with {report.problems[0]}"
-    command = f"gridql import-csv {shlex.quote(csv)}" + (
-        f" --mapping {shlex.quote(mapping)}" if mapping else ""
-    )
     _say("warning", headline)
     print(f"  run '{command}' for the full report", file=sys.stderr)
 
@@ -635,6 +704,7 @@ def build_export_csv_parser() -> argparse.ArgumentParser:
     parser.add_argument("path", help="directory to write into")
     parser.add_argument("--db", metavar="PATH", default=None, help="read from this database")
     parser.add_argument("--csv", metavar="PATH", default=None, help="read from these CSV files")
+    _add_postgres_arguments(parser)
     _add_mapping_argument(parser)
     _add_config_arguments(parser)
     _add_color_argument(parser)
@@ -686,8 +756,10 @@ def export_csv(
     csv: str | None = None,
     config: Config | None = None,
     mapping: str | None = None,
+    postgres: str | None = None,
+    live: bool = False,
 ) -> str:
-    network = network_for(db, csv, config, mapping)
+    network = network_for(db, csv, config, mapping, postgres, live)
     written = write_csv(network, path)
     return f"wrote {', '.join(p.name for p in written)} to {path}"
 
@@ -710,6 +782,7 @@ def build_export_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--csv", metavar="PATH", default=None, help="read the network from CSV files"
     )
+    _add_postgres_arguments(parser)
     _add_mapping_argument(parser)
     _add_config_arguments(parser)
     _add_color_argument(parser)
@@ -755,6 +828,7 @@ def build_validate_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--csv", metavar="PATH", default=None, help="validate these CSV files"
     )
+    _add_postgres_arguments(parser)
     _add_mapping_argument(parser)
     parser.add_argument(
         "--strict", action="store_true", help="exit non-zero on warnings as well as errors"
@@ -770,10 +844,12 @@ def run_validate(
     csv: str | None = None,
     config: Config | None = None,
     mapping: str | None = None,
+    postgres: str | None = None,
+    live: bool = False,
 ) -> int:
     """Print a validation report. Exit non-zero when the model is unsound."""
     try:
-        report = validate(network_for(db, csv, config, mapping))
+        report = validate(network_for(db, csv, config, mapping, postgres, live))
     except GridQLError as error:
         _say("error", error)
         return 1
@@ -789,8 +865,10 @@ def export_cim(
     csv: str | None = None,
     config: Config | None = None,
     mapping: str | None = None,
+    postgres: str | None = None,
+    live: bool = False,
 ) -> str:
-    network = network_for(db, csv, config, mapping)
+    network = network_for(db, csv, config, mapping, postgres, live)
     objects = None if query is None else evaluate(network, parse(query)).objects
 
     if path == "-":
@@ -936,7 +1014,8 @@ def _where_to_query(db: str) -> list[str]:
     except ValueError:
         setting = str(saved)
     change = f'replace csv = ... with db = "{setting}"' if config.csv else f'set db = "{setting}"'
-    reason = "names no dataset" if not (config.db or config.csv) else "names that one"
+    named = config.db or config.csv or config.postgres is not None
+    reason = "names no dataset" if not named else "names that one"
     return [
         command,
         f"note: a plain 'gridql' here still reads {config.dataset()}, because "
@@ -988,7 +1067,9 @@ def repl(
     output_format: str | None,
     source: str = "sample network FDR-104",
     config: Config | None = None,
+    reload=None,
 ) -> int:
+    """Read queries until told to stop. ``reload`` reads the network again."""
     config = config or Config()
     palette = _stdout()
     print(_banner(source))
@@ -1030,6 +1111,18 @@ def repl(
             continue
         if lowered == ".validate":
             print(validate(network).summary(palette))
+            continue
+        if lowered == ".reload":
+            if reload is None:
+                print("nothing to reload: this session was given its network")
+                continue
+            try:
+                network = reload()
+            except GridQLError as error:
+                # The network already loaded is still there to query.
+                _say("error", f"{error}; still querying what was loaded before")
+                continue
+            print(f"reloaded: {len(network.devices)} devices, {len(network.feeders)} feeders")
             continue
         if lowered.startswith(".run"):
             parts = line.split()
@@ -1105,7 +1198,9 @@ def main(argv: list[str] | None = None) -> int:
         except GridQLError as error:
             _say("error", error)
             return 1
-        return run_validate(args.db, args.strict, args.csv, config, args.mapping)
+        return run_validate(
+            args.db, args.strict, args.csv, config, args.mapping, args.postgres, args.live
+        )
 
     if argv and argv[0] == "import-csv":
         args = build_import_csv_parser().parse_args(argv[1:])
@@ -1135,7 +1230,9 @@ def main(argv: list[str] | None = None) -> int:
         args = build_export_csv_parser().parse_args(argv[1:])
         _use_color(args.color)
         return _emit(
-            lambda: export_csv(args.path, args.db, args.csv, _config(args), args.mapping)
+            lambda: export_csv(
+                args.path, args.db, args.csv, _config(args), args.mapping, args.postgres, args.live
+            )
         )
 
     if argv and argv[0] == "export-cim":
@@ -1143,7 +1240,14 @@ def main(argv: list[str] | None = None) -> int:
         _use_color(args.color)
         return _emit(
             lambda: export_cim(
-                args.path, args.query, args.db, args.csv, _config(args), args.mapping
+                args.path,
+                args.query,
+                args.db,
+                args.csv,
+                _config(args),
+                args.mapping,
+                args.postgres,
+                args.live,
             )
         )
 
@@ -1163,19 +1267,28 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = _config(args)
-        network = network_for(args.db, args.csv, config, args.mapping)
+        network = _network(args, config)
     except GridQLError as error:
         _say("error", error)
         return 1
 
     if args.query is None:
-        return repl(network, args.format, source_of(args.db, args.csv, config), config)
+        source = (
+            network.source if args.postgres or args.live else source_of(args.db, args.csv, config)
+        )
+        return repl(
+            network, args.format, source, config, reload=lambda: _network(args, config)
+        )
 
     return _emit(lambda: run_query(network, args.query, args.format, args.explain, _stdout()))
 
 
 def _config(args: argparse.Namespace) -> Config:
     return project_config(args.config, not args.no_config)
+
+
+def _network(args: argparse.Namespace, config: Config) -> Network:
+    return network_for(args.db, args.csv, config, args.mapping, args.postgres, args.live)
 
 
 def _run(argv: list[str]) -> str:
@@ -1186,7 +1299,7 @@ def _run(argv: list[str]) -> str:
     params = parameters(args.params, options)
     config = _config(args)
     return run_script(
-        network_for(args.db, args.csv, config, args.mapping),
+        _network(args, config),
         resolve_script(config, args.file),
         args.format,
         args.explain,

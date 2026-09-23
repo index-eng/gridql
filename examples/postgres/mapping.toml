@@ -1,6 +1,8 @@
 # How this utility's GIS database becomes the GridQL model.
 #
 #   psql -d cedar_hill -f examples/postgres/cedar_hill.sql
+#   gridql --postgres postgresql:///cedar_hill \
+#       --mapping examples/postgres/mapping.toml 'FIND fuses WHERE state = OPEN'
 #   gridql import-postgres postgresql:///cedar_hill \
 #       --mapping examples/postgres/mapping.toml --db cedar-hill.sqlite
 #

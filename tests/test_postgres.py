@@ -380,6 +380,129 @@ class TableTests(ServerTestCase):
         self.assertIn('column "facility_idd" does not exist', message)
 
 
+class LiveQueryTests(ServerTestCase):
+    SETUP_SQL = EXAMPLE_SQL.read_text(encoding="utf-8")
+
+    OPEN_FUSES = "FIND fuses WHERE state = OPEN"
+
+    def live(self, *argv):
+        return run_cli(
+            [*argv, "--postgres", self.database, "--mapping", str(EXAMPLE_MAPPING),
+             "--format", "csv", "--no-config"]
+        )
+
+    def close_the_open_fuse(self):
+        self.sql("UPDATE gis.fuse SET position = 'C' WHERE facility_id = 'FU-1201-04'")
+        self.addCleanup(
+            self.sql, "UPDATE gis.fuse SET position = 'O' WHERE facility_id = 'FU-1201-04'"
+        )
+
+    def project(self, **settings) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / CONFIG_NAME
+        settings.setdefault("mapping", EXAMPLE_MAPPING.as_posix())
+        path.write_text(
+            "".join(f'{key} = "{value}"\n' for key, value in settings.items()), encoding="utf-8"
+        )
+        return path
+
+    def test_a_query_reads_the_database_as_it_is_now(self):
+        code, out, err = self.live(self.OPEN_FUSES)
+        self.assertEqual(code, 0, err)
+        self.assertIn("FU-1201-04", out)
+
+        self.close_the_open_fuse()
+        code, out, _ = self.live(self.OPEN_FUSES)
+        self.assertEqual(code, 0)
+        self.assertNotIn("FU-1201-04", out)
+
+    def test_a_project_naming_only_postgres_is_queried_live(self):
+        config = self.project(postgres=self.database)
+        code, out, err = run_cli([self.OPEN_FUSES, "--config", str(config), "--format", "csv"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("FU-1201-04", out)
+
+        code, out, _ = run_cli(["config", "--config", str(config)])
+        self.assertIn("(Postgres, read live at each query)", out)
+
+    def test_live_passes_over_the_projects_snapshot(self):
+        db = str(self.project().parent / "grid.sqlite")
+        code, _, err = run_cli(
+            ["import-postgres", self.database, "--mapping", str(EXAMPLE_MAPPING), "--db", db]
+        )
+        self.assertEqual(code, 0, err)
+        config = self.project(postgres=self.database, db=db)
+        self.close_the_open_fuse()
+
+        _, snapshot_answer, _ = run_cli([self.OPEN_FUSES, "--config", str(config), "-f", "csv"])
+        self.assertIn("FU-1201-04", snapshot_answer)
+        code, live_answer, err = run_cli(
+            [self.OPEN_FUSES, "--config", str(config), "-f", "csv", "--live"]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("FU-1201-04", live_answer)
+
+    def test_run_validate_and_export_read_live_too(self):
+        code, out, err = run_cli(
+            ["run", str(ROOT / "queries" / "feeder_report.gridql"), "--feeder", "FDR-1202",
+             "--postgres", self.database, "--mapping", str(EXAMPLE_MAPPING), "--no-config"]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("TX-50214  Pad 50214   150", out)
+
+        code, out, err = run_cli(
+            ["validate", "--postgres", self.database, "--mapping", str(EXAMPLE_MAPPING),
+             "--no-config", "--color", "never"]
+        )
+        self.assertEqual(code, 0, err)
+
+        code, out, err = run_cli(
+            ["export-cim", "-", "--query", 'FIND devices FED BY "FDR-1202"',
+             "--postgres", self.database, "--mapping", str(EXAMPLE_MAPPING), "--no-config"]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("BKR-1202", out)
+        self.assertNotIn("BKR-1201", out)
+
+    def test_the_repl_reloads_what_the_database_holds_now(self):
+        answers = []
+
+        def typed(prompt):
+            answers.append(prompt)
+            step = len(answers)
+            if step == 2:
+                self.close_the_open_fuse()
+            return [self.OPEN_FUSES, ".reload", self.OPEN_FUSES, ".quit"][step - 1]
+
+        with mock.patch("builtins.input", typed):
+            code, out, err = run_cli(
+                ["--postgres", self.database, "--mapping", str(EXAMPLE_MAPPING), "--no-config",
+                 "--format", "csv", "--color", "never"]
+            )
+        self.assertEqual(code, 0, err)
+        first, reloaded = out.split("reloaded:")
+        self.assertIn("Loaded: Postgres database", out)
+        self.assertIn("FU-1201-04", first)
+        self.assertIn(" 77 devices, 2 feeders", reloaded)
+        self.assertNotIn("FU-1201-04", reloaded)
+
+    def test_a_bad_load_warns_and_points_at_the_import_without_the_password(self):
+        # A transformer with a fuse's mRID: the second of the two is skipped.
+        self.sql("INSERT INTO gis.transformer (facility_id, circuit_no) VALUES ('FU-1201-01', 1201)")
+        self.addCleanup(self.sql, "DELETE FROM gis.transformer WHERE facility_id = 'FU-1201-01'")
+        with_password = make_conninfo(self.database, password="hunter2")
+        code, out, err = run_cli(
+            ["FIND fuses", "--postgres", with_password, "--mapping", str(EXAMPLE_MAPPING),
+             "--no-config", "--color", "never"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("warning: 1 row skipped or incomplete in Postgres database", err)
+        self.assertIn("gis.transformer (facility_id FU-1201-01): duplicate mRID", err)
+        self.assertIn("gridql import-postgres", err)
+        self.assertNotIn("hunter2", err)
+
+
 # -- without a server ----------------------------------------------------
 
 
@@ -480,6 +603,29 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("cannot connect to Postgres", err)
 
+    def test_live_needs_a_project_naming_a_database(self):
+        code, _, err = run_cli(["FIND reclosers", "--live", "--no-config"])
+        self.assertEqual(code, 1)
+        self.assertIn("--live reads the database a project names", err)
+        self.assertIn("name one with --postgres", err)
+
+    def test_postgres_is_one_dataset_among_the_others(self):
+        code, _, err = run_cli(
+            ["FIND reclosers", "--db", "grid.sqlite", "--postgres", "service=gis", "--no-config"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("pass either --db or --postgres, not both", err)
+
+    def test_querying_postgres_needs_a_mapping(self):
+        code, _, err = run_cli(["FIND reclosers", "--postgres", "service=gis", "--no-config"])
+        self.assertEqual(code, 1)
+        self.assertIn("reading Postgres needs --mapping", err)
+
+    def test_a_query_given_in_place_of_the_database_is_caught(self):
+        code, _, err = run_cli(["--postgres", "FIND reclosers", "--no-config"])
+        self.assertEqual(code, 1)
+        self.assertIn("--postgres takes a database to connect to, but was given the query", err)
+
     def test_the_config_names_the_database_without_its_password(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / CONFIG_NAME
@@ -487,9 +633,18 @@ class CommandLineTests(unittest.TestCase):
             config = load_config(path)
             self.assertEqual(config.postgres, "postgresql://gis:s3cret@gis-db/utility")
             described = config.describe()
-            self.assertIn("import:  postgresql://gis:***@gis-db/utility", described)
+            self.assertIn(
+                "data:    postgresql://gis:***@gis-db/utility (Postgres, read live at each query)",
+                described,
+            )
             self.assertIn("~/.pgpass or PGPASSWORD keeps it out", described)
             self.assertNotIn("s3cret", described)
+
+            path.write_text('postgres = "service=gis"\ndb = "grid.sqlite"\n', encoding="utf-8")
+            described = load_config(path).describe()
+            self.assertIn("data:    ", described)
+            self.assertIn("grid.sqlite", described)
+            self.assertIn("import:  service=gis (--live to query it directly)", described)
 
             path.write_text("postgres = 5432\n", encoding="utf-8")
             with self.assertRaises(GridQLError) as caught:
