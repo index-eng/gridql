@@ -19,6 +19,10 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+# Only import-postgres needs it; everything else is the standard library.
+postgres = ["psycopg[binary]>=3.1"]
+
 [project.scripts]
 gridql = "gridql.cli:main"
 

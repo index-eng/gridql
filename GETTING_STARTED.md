@@ -24,7 +24,9 @@ hand-assembling CIM structures.
 ## Installing
 
 You need **Python 3.11 or newer**. GridQL has **no dependencies** — everything it does uses the
-standard library, so there is nothing to resolve and nothing to pin.
+standard library, so there is nothing to resolve and nothing to pin. The one exception is optional:
+reading straight from a Postgres database needs the psycopg driver, which
+`python3 -m pip install '.[postgres]'` brings with it.
 
 Check your Python first:
 
@@ -356,7 +358,9 @@ feeder = "FDR-104"
 
 A project that reads CSV sets `csv = "gis-export"` instead of `db`, and can add
 `mapping = "gis-export.toml"` to say what the export's columns mean — see
-[Mapping your utility's columns](#mapping-your-utilitys-columns).
+[Mapping your utility's columns](#mapping-your-utilitys-columns). A project whose network lives in
+Postgres adds `postgres = "service=gis"` beside its `mapping` and `db` — see
+[Reading from Postgres](#reading-from-postgres).
 
 ```bash
 gridql config             # what is in effect, and the queries it points at
@@ -377,6 +381,7 @@ cannot tell where it came from, so nothing in a `.gridql` file depends on the so
 | --- | --- | --- |
 | CSV — a directory, or a single devices file | `--csv PATH` (with `--mapping FILE` for your own schema), `import-csv`, `load_csv()` | `write_csv()` |
 | SQLite — GridQL's own schema | `--db PATH`, `load_network()` | `init`, `save_network()` |
+| Postgres — a utility's own schema, through a mapping | `import-postgres`, `read_postgres()` | — |
 | CIM RDF/XML | `import-cim`, `read_cim()` | `export-cim`, `RETURN cim` |
 | OpenDSS — a master `.dss` file and what it redirects to | `import-dss`, `read_dss()` | — |
 | Python objects | the `Network` builder API | — |
@@ -385,9 +390,10 @@ Query *results* render as `table`, `json`, `csv` or `cim`, chosen with `--format
 clause. That is a separate question from the input format: you can read CSV and return CIM.
 
 A SQLite file must be one GridQL wrote — the loader checks a schema version and refuses anything
-else rather than guessing. There is no connection to an external database: reading from Oracle,
-Postgres or a GIS server means exporting to CSV first, which is what the CSV reader is for — and a
-mapping file means the export can keep the source system's own table and column names.
+else rather than guessing. A Postgres database can be read as it is, through a mapping; reading
+from Oracle, SQL Server or a GIS server means exporting to CSV first, which is what the CSV reader
+is for — and a mapping file means the export can keep the source system's own table and column
+names.
 
 ### Loading your own data
 
@@ -568,6 +574,64 @@ Connectivity can be listed device to device in a `connections` section, or — a
 record it — as the nodes at each device's ends, with devices joined where their node IDs match.
 Map those in the device section: `from_node = "FROM_NODE"` and `to_node = "TO_NODE"`.
 
+### Reading from Postgres
+
+If the network lives in a Postgres database — a GIS, an asset register — GridQL can read it where
+it is instead of from an export. You need the driver first:
+
+```bash
+python3 -m pip install '.[postgres]'
+```
+
+There is no standard utility schema to guess from, so a Postgres import always takes a mapping. It
+is the same format as above, with `table = "gis.switch"` where a CSV mapping has
+`file = "SWITCH.csv"`. Table and column names are matched whatever their case, and a section can
+give a `query` instead, for a join or a filter:
+
+```toml
+[[devices]]
+query = "SELECT * FROM gis.transformer WHERE status = 'IN SERVICE'"
+type  = { value = "transformer" }
+mrid  = "facility_id"
+kva   = "kva_rating"
+```
+
+To try it on the example data, load [`examples/postgres/cedar_hill.sql`](examples/postgres/cedar_hill.sql)
+into a scratch database — the same two feeders as the CSV example, in typed tables — and import
+it with [its mapping](examples/postgres/mapping.toml):
+
+```bash
+createdb cedar_hill
+psql -d cedar_hill -f examples/postgres/cedar_hill.sql
+gridql import-postgres postgresql:///cedar_hill --mapping examples/postgres/mapping.toml
+```
+
+Without `--db` that is a trial run: it reports what it read, just as `import-csv` does, and saves
+nothing. Add `--db cedar-hill.sqlite` to keep it, then query that with `--db` as usual. Queries
+always run against a saved database rather than the live one, so asking questions never puts load
+on the production server.
+
+The import only ever reads. It runs in one read-only transaction, which also means every table is
+read as it stood at the same moment, even while people are editing the GIS.
+
+The database is named by a URL (`postgresql://gis@gis-db/utility`) or a libpq string
+(`host=gis-db dbname=utility user=gis`, or `service=gis`). Keep the password out of it: libpq finds
+one in `~/.pgpass` or `PGPASSWORD`. A project records the rest, so a nightly refresh is one command:
+
+```toml
+postgres = "service=gis"
+mapping  = "gis.toml"
+db       = "grid.sqlite"
+```
+
+```bash
+gridql import-postgres --db grid.sqlite --force
+```
+
+A refresh is refused, leaving the old database in place, when the new data would drop a feeder,
+lose more than a tenth of the equipment, or fail validation — pass `--skip-checks` when the change
+is intended.
+
 ### Persistence: SQLite
 
 ```bash
@@ -670,14 +734,14 @@ save_network(network, "grid.sqlite")
 | `gridql/lang/` | the language: lexer, parser, AST, evaluator |
 | `gridql/model/` | the semantic model: equipment, containers, the connectivity graph |
 | `gridql/storage/` | the SQLite schema and loader |
-| `gridql/ingest/` | reading and writing CSV, and mapping files |
+| `gridql/ingest/` | reading and writing CSV, reading Postgres, and mapping files |
 | `gridql/cim/` | CIM import and export |
 | `gridql/dss/` | OpenDSS import: the script language, and what a model becomes |
 | `gridql/validate.py` | model validation |
 | `gridql/config.py` | `project.gridqlconfig`: which dataset, which queries |
 | `gridql/data/sample.py` | the bundled sample feeder, used outside a project, built through the public API |
 | `queries/` | example `.gridql` files, written for the example data |
-| `examples/` | two realistic feeders as CSV: `csv/` in GridQL's own layout, `mapped/` as a GIS might export it |
+| `examples/` | two realistic feeders: `csv/` in GridQL's own layout, `mapped/` as a GIS might export it, `postgres/` as a GIS database holds it |
 | `project.gridqlconfig` | this repository's own project file |
 | `tests/` | the test suite |
 | `tests/reference/` | fetches the IEEE test feeders the reference-model tests read |
@@ -685,8 +749,8 @@ save_network(network, "grid.sqlite")
 
 ## Not built yet
 
-An editor, GeoJSON output and device geometry, a JSON model format, and reading straight from a
-database such as Postgres.
+An editor, GeoJSON output and device geometry, a JSON model format, and reading databases other
+than Postgres — Oracle and SQL Server exports go through CSV.
 
 The `EXPORT CIM` statement from the design notes is not its own syntax — a `PARAM`, `FED BY` and
 `RETURN cim` do the same job with clauses that already exist, as

@@ -21,7 +21,7 @@ from .cim import export_network, import_network, read_cim
 from .config import Config, find_config, load_config, project_config
 from .data import build_sample_network
 from .dss import read_dss
-from .ingest import load_csv, read_csv, write_csv
+from .ingest import load_csv, load_postgres, read_csv, read_postgres, write_csv
 from .errors import (
     GridQLError,
     GridQLNameError,
@@ -74,12 +74,14 @@ __all__ = [
     "load_config",
     "load_csv",
     "load_network",
+    "load_postgres",
     "parse",
     "parse_script",
     "project_config",
     "read_cim",
     "read_csv",
     "read_dss",
+    "read_postgres",
     "read_script",
     "render",
     "render_script",

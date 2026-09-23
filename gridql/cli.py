@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -21,7 +22,7 @@ from .model import Network
 from .model.types import class_for
 from .cim import export_network, export_summary, read_cim
 from .dss import read_dss
-from .ingest import read_csv, write_csv
+from .ingest import read_csv, read_postgres, write_csv
 from .script import read_script
 from .storage import StorageError, feeder_ids, load_network, object_counts, save_network
 from .validate import ValidationReport, validate
@@ -87,6 +88,7 @@ _EPILOG = """examples:
   gridql --csv ./gis-export 'FIND transformers WHERE kva >= 500'
   gridql import-csv ./gis-export --db grid.sqlite
   gridql import-csv ./gis-export --mapping gis-export.toml
+  gridql import-postgres postgresql://gis@gis-db/utility --mapping gis.toml --db grid.sqlite
 
 With no --db and no project.gridqlconfig, queries run against the bundled
 sample feeder FDR-104. Run 'gridql config' to see what is in effect."""
@@ -545,6 +547,86 @@ def build_import_csv_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_import_postgres_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gridql import-postgres",
+        description=(
+            "Read a network from a Postgres database, as a mapping file says, "
+            "reporting what it held. The database is only read, never written."
+        ),
+        epilog=(
+            "The database defaults to postgres = ... in the project config, then to the\n"
+            "PGHOST, PGDATABASE and PGSERVICE environment variables. A password is best kept\n"
+            "in ~/.pgpass or PGPASSWORD, not on the command line."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "database",
+        nargs="?",
+        default=None,
+        help="a connection URL or string: postgresql://gis@gis-db/utility, or service=gis",
+    )
+    parser.add_argument(
+        "--db", metavar="PATH", default=None, help="save the loaded network to this database"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="overwrite the database if it already exists"
+    )
+    parser.add_argument(
+        "--skip-checks",
+        action="store_true",
+        help="replace an existing database even when the refresh checks object",
+    )
+    parser.add_argument(
+        "--mapping",
+        metavar="PATH",
+        default=None,
+        help="a TOML file saying which tables hold what (default: the project's mapping)",
+    )
+    _add_config_arguments(parser)
+    _add_color_argument(parser)
+    return parser
+
+
+#: Environment variables that name a database when no connection string does.
+_PG_ENVIRONMENT = ("PGHOST", "PGDATABASE", "PGSERVICE")
+
+
+def import_postgres(
+    database: str | None = None,
+    db: str | None = None,
+    force: bool = False,
+    mapping: str | None = None,
+    config: Config | None = None,
+    skip_checks: bool = False,
+    palette: Palette = PLAIN,
+) -> str:
+    """Read a Postgres database through a mapping, report it, and save it if asked."""
+    config = config or Config()
+    if database is None:
+        database = config.postgres
+    if database is None:
+        if not any(os.environ.get(name) for name in _PG_ENVIRONMENT):
+            raise GridQLError(
+                "which database? Name it -- gridql import-postgres postgresql://USER@HOST/NAME "
+                f"-- or set postgres = \"...\" in {CONFIG_NAME}, or one of "
+                f"{', '.join(_PG_ENVIRONMENT)}"
+            )
+        database = ""
+
+    mapping = mapping or config.mapping
+    if mapping is None:
+        raise GridQLError(
+            "a Postgres import needs --mapping: utilities' schemas have nothing in common "
+            "to guess from, so a mapping file says which tables hold what. "
+            "examples/postgres/mapping.toml is a worked one"
+        )
+
+    document = read_postgres(database, mapping)
+    return _import(document, db, force, skip_checks, palette, f"read {document.network.source}")
+
+
 def build_export_csv_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gridql export-csv",
@@ -742,9 +824,17 @@ def import_dss(
     return _import(read_dss(path), db, force, skip_checks, palette)
 
 
-def _import(document, db: str | None, force: bool, skip_checks: bool, palette: Palette) -> str:
+def _import(
+    document,
+    db: str | None,
+    force: bool,
+    skip_checks: bool,
+    palette: Palette,
+    heading: str | None = None,
+) -> str:
     """Report what an import read, validate it, and save it if asked."""
-    lines = [document.report.summary()]
+    lines = [heading] if heading else []
+    lines.append(document.report.summary())
 
     report = validate(document.network)
     if not report:
@@ -1023,6 +1113,21 @@ def main(argv: list[str] | None = None) -> int:
         return _emit(
             lambda: import_csv(
                 args.path, args.db, args.force, args.mapping, _config(args), args.skip_checks
+            )
+        )
+
+    if argv and argv[0] == "import-postgres":
+        args = build_import_postgres_parser().parse_args(argv[1:])
+        _use_color(args.color)
+        return _emit(
+            lambda: import_postgres(
+                args.database,
+                args.db,
+                args.force,
+                args.mapping,
+                _config(args),
+                args.skip_checks,
+                _stdout(),
             )
         )
 

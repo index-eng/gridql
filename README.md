@@ -16,8 +16,9 @@ TX-40512  Pad 40512  transformer  FDR-1201  ABC     500  12.47            0.48
 2 rows
 ```
 
-The semantic model and interpreter, SQLite persistence, CSV in and out, CIM import and export,
-model validation, and saved queries that take parameters. Pure Python 3.11+, no dependencies.
+The semantic model and interpreter, SQLite persistence, CSV in and out, Postgres import, CIM import
+and export, model validation, and saved queries that take parameters. Pure Python 3.11+, no
+dependencies — reading straight from Postgres adds one, the psycopg driver.
 
 New here? [**Getting started**](GETTING_STARTED.md) walks through installing it and what it can do.
 
@@ -381,6 +382,7 @@ name    = "Oakdale District"
 db      = "grid.sqlite"      # or: csv = "gis-export"
 queries = "queries"
 # mapping = "gis-export.toml"   what the CSV columns mean; see "Mapping a utility's own schema"
+# postgres = "service=gis"       the database import-postgres reads; see "Reading from Postgres"
 
 [params]
 feeder = "FDR-104"
@@ -661,6 +663,64 @@ read in the project. [`examples/mapped/`](examples/mapped/) is the example data 
 export it — a file per equipment type, connected through `FROM_NODE` and `TO_NODE` — with the
 mapping that reads it back to exactly the same network.
 
+### Reading from Postgres
+
+A GIS or asset database need not be exported first. `import-postgres` reads it through a mapping —
+the same format, with `table` where a CSV mapping has `file`, or a `query` for a join or a filter —
+and saves the network to SQLite for querying:
+
+```toml
+[[devices]]
+table  = "gis.switch"                  # schema-qualified; matched whatever its case
+mrid   = "facility_id"
+type   = { column = "sw_type", values = { BKR = "breaker", RCL = "recloser", LBS = "switch" } }
+state  = { column = "position", values = { O = "OPEN", C = "CLOSED" } }
+is_tie = "tie_flag"                    # a boolean column needs no translating
+
+[[devices]]                            # the billing system knows who a service point serves
+query = """
+    SELECT sp.*, count(p.premise_no) AS customer_count
+    FROM gis.service_point sp
+    LEFT JOIN cis.premise p ON p.service_point = sp.facility_id
+    GROUP BY sp.facility_id
+"""
+type  = { value = "load" }
+mrid  = "facility_id"
+```
+
+```bash
+pip install 'gridql[postgres]'                                                   # the psycopg driver
+gridql import-postgres postgresql://gis@gis-db/utility --mapping gis.toml       # try it
+gridql import-postgres postgresql://gis@gis-db/utility --mapping gis.toml --db grid.sqlite
+```
+
+**It only reads.** Everything is read in one read-only, repeatable-read transaction, so the import
+cannot change the database, and every table is read as it stood at the same moment — an edit made
+while it runs cannot leave a device on a feeder the feeder table has not caught up with.
+
+**Typed columns read as their text would.** Booleans, numbers and dates arrive as a CSV cell holding
+them would, so everything above about mappings applies unchanged, and a NULL is an empty cell that
+a `default` fills. Columns holding no plain value — geometry, `bytea`, `json`, arrays — are not
+kept as attributes unless `extras` names them; the report lists what it left out. A table's rows
+are read in primary-key order, so the same row wins a duplicate every time, and a bad row is
+reported by its key:
+
+```
+gis.switch (objectid 4411): duplicate mRID 'SW-1188'
+```
+
+**The connection** is a URL or a libpq string (`service=gis`); whatever it leaves out comes from the
+`PG*` environment variables, `~/.pgpass` and `pg_service.conf`, so a password need not be written
+anywhere GridQL reads. A project names it with `postgres = "..."` next to its `mapping` and `db`,
+and `gridql import-postgres --db grid.sqlite --force` becomes the whole refresh, guarded by the same
+checks as any other: an import that would drop feeders or a tenth of the equipment is refused.
+
+Queries run against the saved snapshot rather than the live database. A query walks the
+connectivity graph, which means reading the whole network, and doing that for every question would
+load the production server for nothing. [`examples/postgres/`](examples/postgres/) holds the example
+feeders as typed tables in a `gis` schema, with customers in a separate `cis` one, and the mapping
+that imports them to exactly the network the CSV example gives.
+
 ## Persistence
 
 A network can be stored in SQLite and loaded back identically — same objects, same connectivity,
@@ -880,7 +940,8 @@ way, with the same ratings. (`python3 tests/reference/fetch.py` downloads them.)
          Graph Model          gridql/model/network.py -- connectivity and traversal
                |
         SQLite storage        gridql/storage  -- schema and the NetworkLoader
-         CSV in and out       gridql/ingest   -- the format utilities hand you
+         CSV in and out       gridql/ingest   -- the format utilities hand you,
+          Postgres in                            and the database behind it
 
        gridql/config.py -- project.gridqlconfig: which dataset, which queries
 
@@ -918,8 +979,8 @@ Labs, LLC.
 
 ## Not built yet
 
-GeoJSON output and device geometry, a JSON model format, reading straight from a database such as
-Postgres, and the editor.
+GeoJSON output and device geometry, a JSON model format, reading databases other than Postgres
+(Oracle and SQL Server exports go through CSV), and the editor.
 
 The `EXPORT CIM FROM feeder "FDR-104" INCLUDING ...` statement from the design is not implemented
 as its own syntax. [`queries/export_feeder.gridql`](queries/export_feeder.gridql) does the same

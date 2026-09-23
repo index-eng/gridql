@@ -16,6 +16,12 @@ queries = "queries"
 #
 #   csv = "gis-export"
 #   db  = "grid.sqlite"
+#
+# and, when the network lives in the utility's Postgres, at that too, so
+# 'gridql import-postgres --db grid.sqlite --force' refreshes the database:
+#
+#   postgres = "service=gis"
+#   mapping  = "gis.toml"
 csv = "examples/csv"
 
 [params]

@@ -19,6 +19,14 @@ finds its own::
     [params]
     feeder = "FDR-104"
 
+A project whose network lives in a utility's Postgres database names it, so
+``gridql import-postgres --db grid.sqlite --force`` refreshes the project's
+database with nothing else to say::
+
+    postgres = "service=gis"       # or: "postgresql://gis@gis-db/utility"
+    mapping  = "gis.toml"          # which tables hold what
+    db       = "grid.sqlite"
+
 Paths resolve relative to the file, so the same config works from any
 subdirectory. Everything in it is a *default*: an explicit ``--db``, ``--csv``
 or ``--<param>`` on the command line wins.
@@ -32,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import GridQLError
+from .ingest.postgres import has_password, redact
 from .script import SUFFIX, find_scripts
 
 #: The name searched for, from the working directory upwards.
@@ -39,7 +48,7 @@ CONFIG_NAME = "project.gridqlconfig"
 
 #: Keys the file may set. Anything else is a mistake worth reporting, since
 #: a silently ignored key looks exactly like a setting that does not work.
-KEYS = ("name", "db", "csv", "mapping", "queries", "params")
+KEYS = ("name", "db", "csv", "mapping", "queries", "params", "postgres")
 
 
 @dataclass(frozen=True)
@@ -54,7 +63,10 @@ class Config:
     params: dict[str, Any] = field(default_factory=dict)
     #: How the project's CSV files map onto the model. It describes the
     #: utility's export format, so it applies to any CSV read in the project.
+    #: Or, with ``postgres``, which of the database's tables hold what.
     mapping: str | None = None
+    #: The database ``gridql import-postgres`` reads: a connection string.
+    postgres: str | None = None
 
     def __bool__(self) -> bool:
         return self.path is not None
@@ -80,6 +92,13 @@ class Config:
         if self.name:
             lines.append(f"project: {self.name}")
         lines.append(f"data:    {self.dataset()}")
+        if self.postgres is not None:
+            lines.append(f"import:  {redact(self.postgres) or '(the PG* environment variables)'}")
+            if has_password(self.postgres):
+                lines.append(
+                    "         note: the password here can be read by anyone who can read "
+                    "this file; ~/.pgpass or PGPASSWORD keeps it out"
+                )
         if self.mapping:
             lines.append(f"mapping: {_readable(self.mapping)}")
         if self.queries:
@@ -149,12 +168,19 @@ def load_config(path: str | Path) -> Config:
         # Relative to the config, so the project works from any subdirectory.
         return str(root / value)
 
-    name = data.get("name")
-    if name is not None and not isinstance(name, str):
-        raise GridQLError(f"{path}: name must be a string")
+    for key in ("name", "postgres"):
+        if data.get(key) is not None and not isinstance(data[key], str):
+            raise GridQLError(f"{path}: {key} must be a string")
 
     return Config(
-        path, name, _path("db"), _path("csv"), _path("queries"), dict(params), _path("mapping")
+        path,
+        data.get("name"),
+        _path("db"),
+        _path("csv"),
+        _path("queries"),
+        dict(params),
+        _path("mapping"),
+        data.get("postgres"),
     )
 
 

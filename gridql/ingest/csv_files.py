@@ -114,8 +114,10 @@ class CsvReport:
     problems: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
-    def problem(self, source: str, line: int, message: str) -> None:
-        self.problems.append(f"{source}:{line}: {message}")
+    def problem(self, source: str, line: int | str, message: str) -> None:
+        # A file's rows are numbered; a table's are named by their key.
+        where = f"{source}:{line}" if isinstance(line, int) else f"{source} ({line})"
+        self.problems.append(f"{where}: {message}")
 
     def counts(self) -> str:
         through = f" through {self.nodes} nodes" if self.nodes else ""
@@ -146,7 +148,8 @@ class _Row:
     """One source row, keyed by model field, with where it came from."""
 
     values: dict[str, str]
-    line: int
+    #: The line in a file, or which record of a table, such as "objectid 4411".
+    line: int | str
     source: str
     #: Columns a mapping kept as attributes. None when the row was read by
     #: alias, where anything unrecognised in ``values`` is an extra.
@@ -183,8 +186,17 @@ def read_csv(
         if overrides:
             raise CsvError("a mapping names its own files; set file = ... in the mapping instead")
         tables = _mapped_tables(source, mapping, report)
+    return assemble(tables, str(source), report)
 
-    network = Network(source=str(source))
+
+def assemble(tables: dict[str, Iterable[_Row]], source: str, report: CsvReport) -> CsvDocument:
+    """Build a network from rows already keyed by model field.
+
+    Whatever the rows were read from -- files by alias, files by mapping, or
+    database tables -- they become objects, containers and connections here,
+    the same way.
+    """
+    network = Network(source=source)
 
     for row in tables["substations"]:
         _add_substation(network, row, report)
@@ -282,12 +294,17 @@ def _mapped_tables(
         )
     if not isinstance(mapping, Mapping):
         mapping = load_mapping(mapping)
+    if mapping.reads_database:
+        where = f"{mapping.path} names" if mapping.path else "the mapping names"
+        raise CsvError(
+            f"{where} database tables, not files; read it with 'gridql import-postgres'"
+        )
 
     missing = [
-        section.file
+        section.source
         for kind in TARGETS
         for section in mapping.of(kind)
-        if not (directory / section.file).is_file()
+        if not (directory / section.source).is_file()
     ]
     if missing:
         where = f" (from {mapping.path})" if mapping.path else ""
@@ -299,16 +316,16 @@ def _mapped_tables(
 def _mapped_rows(directory: Path, sections, report: CsvReport) -> Iterator[_Row]:
     """Each row of each file a mapping names, translated by that mapping."""
     for section in sections:
-        header, records = _table(directory / section.file)
+        header, records = _table(directory / section.source)
         if not header:
-            report.notes.append(f"{section.file}: empty file")
+            report.notes.append(f"{section.source}: empty file")
             continue
         bound = section.bind(header)
         for line, values in records:
             record = dict(zip(header, values))
             fields, extras = bound.translate(record)
             yield _Row(
-                fields, line, section.file, {key: _scalar(text) for key, text in extras.items()}
+                fields, line, section.source, {key: _scalar(text) for key, text in extras.items()}
             )
         report.notes.extend(bound.notes())
 

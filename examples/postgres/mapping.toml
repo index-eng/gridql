@@ -1,0 +1,124 @@
+# How this utility's GIS database becomes the GridQL model.
+#
+#   psql -d cedar_hill -f examples/postgres/cedar_hill.sql
+#   gridql import-postgres postgresql:///cedar_hill \
+#       --mapping examples/postgres/mapping.toml --db cedar-hill.sqlite
+#
+# The same mapping as examples/mapped/mapping.toml, with table = "..." where
+# that one has file = "...". A table may be schema-qualified, and its name and
+# columns are matched whatever their case. A query = "..." runs SQL instead,
+# for a join, a filter, or a view the database does not have.
+#
+# The database is only read, in one read-only transaction, so every table is
+# read as it stood at the same moment.
+
+[substations]
+table   = "gis.station"
+mrid    = "SUB-{station_no}"
+name    = "station_name"
+voltage = { column = "bus_volts", unit = "V" }
+
+[feeders]
+table      = "gis.circuit"
+mrid       = "FDR-{circuit_no}"
+name       = "circuit_desc"
+substation = "SUB-{station_no}"
+voltage    = { column = "nom_volts", unit = "V" }
+# No head column: the one breaker on each circuit is taken as its source.
+
+[[devices]]
+table        = "gis.switch"
+mrid         = "facility_id"
+name         = "description"
+feeder       = "FDR-{circuit_no}"
+substation   = "SUB-{station_no}"
+phases       = "phasing"
+voltage      = { column = "op_volts", unit = "V" }
+type         = { column = "sw_type", values = { BKR = "breaker", RCL = "recloser", LBS = "switch", SECT = "sectionalizer" } }
+state        = { column = "position", values = { O = "OPEN", C = "CLOSED" } }
+normal_state = { column = "normal_position", values = { O = "OPEN", C = "CLOSED" } }
+is_tie       = "tie_flag"                 # a boolean column needs no translating
+from_node    = "from_node"
+to_node      = "to_node"
+
+[[devices]]
+table        = "gis.fuse"
+type         = { value = "fuse" }
+mrid         = "facility_id"
+name         = "description"
+feeder       = "FDR-{circuit_no}"
+substation   = "SUB-{station_no}"
+phases       = "phasing"
+voltage      = { column = "op_volts", unit = "V" }
+state        = { column = "position", values = { O = "OPEN", C = "CLOSED" } }
+normal_state = { column = "normal_position", values = { O = "OPEN", C = "CLOSED" } }
+from_node    = "from_node"
+to_node      = "to_node"
+# link_rating is kept as an attribute:
+#   FIND fuses WHERE link_rating = "40T"
+
+[[devices]]
+table        = "gis.capacitor"
+type         = { value = "capacitor" }
+mrid         = "facility_id"
+name         = "description"
+feeder       = "FDR-{circuit_no}"
+substation   = "SUB-{station_no}"
+phases       = "phasing"
+voltage      = { column = "op_volts", unit = "V" }
+kvar         = "kvar_rating"
+state        = { column = "position", values = { O = "OPEN", C = "CLOSED" } }
+normal_state = { column = "normal_position", values = { O = "OPEN", C = "CLOSED" } }
+from_node    = "node"
+
+[[devices]]
+table             = "gis.transformer"
+type              = { value = "transformer" }
+mrid              = "facility_id"
+name              = "description"
+feeder            = "FDR-{circuit_no}"
+substation        = "SUB-{station_no}"
+phases            = "phasing"
+voltage           = { column = "op_volts", unit = "V" }
+kva               = "kva_rating"
+primary_voltage   = { column = "high_side_volts", unit = "V" }
+secondary_voltage = { column = "low_side_volts", unit = "V" }
+from_node         = "from_node"
+to_node           = "to_node"
+# mounting and install_year are not mapped, so they are kept as attributes:
+#   FIND transformers WHERE install_year < 1990 AND mounting = "POLE"
+
+[[devices]]
+table      = "gis.conductor"
+type       = { value = "line" }
+mrid       = "facility_id"
+feeder     = "FDR-{circuit_no}"
+substation = "SUB-{station_no}"
+phases     = "phasing"
+voltage    = { column = "op_volts", unit = "V" }
+length     = { column = "length_ft", unit = "ft" }
+conductor  = "wire_size"
+ampacity   = "rated_amps"
+from_node  = "from_node"
+to_node    = "to_node"
+
+# The GIS knows where a service point is; the billing system knows who it
+# serves. A query joins the two, so an outage can be counted in customers:
+#   FIND loads WHERE NOT energized SELECT SUM(customer_count)
+[[devices]]
+query = """
+    SELECT sp.*, count(p.premise_no) AS customer_count
+    FROM gis.service_point sp
+    LEFT JOIN cis.premise p ON p.service_point = sp.facility_id
+    GROUP BY sp.facility_id
+"""
+type       = { value = "load" }
+mrid       = "facility_id"
+name       = "description"
+feeder     = "FDR-{circuit_no}"
+substation = "SUB-{station_no}"
+phases     = "phasing"
+voltage    = { column = "service_volts", unit = "V" }
+kw         = "demand_kw"
+kvar       = "demand_kvar"
+from_node  = "node"

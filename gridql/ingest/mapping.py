@@ -36,7 +36,16 @@ Columns the mapping does not name are kept as attributes, as the alias
 reader keeps them, unless the section says ``extras = false`` or lists the
 ones to keep. Nothing here reads files: a section is bound to a header and
 then translates one record at a time, so a database source can use the
-same mapping as a CSV one.
+same mapping as a CSV one. A section read from Postgres names a ``table``
+in place of a ``file``, or gives a ``query`` to run::
+
+    [[devices]]
+    table = "gis.switch"
+    mrid  = "facility_id"
+
+    [[devices]]
+    query = "SELECT * FROM gis.transformer WHERE status = 'IN SERVICE'"
+    mrid  = "facility_id"
 """
 
 from __future__ import annotations
@@ -81,8 +90,11 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
 #: The model type whose attributes an unmapped column must not shadow.
 _TYPE_OF_KIND = {"substations": "substation", "feeders": "feeder", "devices": "device"}
 
+#: Where a section's records come from: exactly one of these is set.
+SOURCES = ("file", "table", "query")
+
 #: Section keys that configure the section rather than map a field.
-_SETTINGS = ("file", "extras")
+_SETTINGS = (*SOURCES, "extras")
 
 _SPEC_KEYS = ("column", "template", "value", "unit", "values", "default")
 _PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
@@ -124,15 +136,28 @@ class FieldSpec:
 
 @dataclass(frozen=True)
 class Section:
-    """One file's worth of mapping: which file, and what its columns mean."""
+    """One source's worth of mapping: where it is, and what its columns mean."""
 
     kind: str
-    file: str
+    #: The file name, the table name, or the SQL, as ``form`` says.
+    source: str
     fields: MappingType[str, FieldSpec]
     #: True keeps every unmapped column, False none, a tuple just those.
     extras: bool | tuple[str, ...] = True
     #: The mapping file this came from, for messages.
     origin: str = "mapping"
+    #: What ``source`` is: one of :data:`SOURCES`.
+    form: str = "file"
+
+    @property
+    def label(self) -> str:
+        """The source as messages name it: a query by its opening words."""
+        if self.form != "query":
+            return self.source
+        words = " ".join(self.source.split())
+        if len(words) <= 43:
+            return f"query ({words})"
+        return f"query ({words[:41].rsplit(' ', 1)[0]}...)"
 
     def bind(self, header: list[str]) -> "BoundSection":
         """Match the section against a file's header, or say what is missing."""
@@ -147,8 +172,8 @@ class Section:
             close = difflib.get_close_matches(column, header, n=1, cutoff=0.6)
             hint = f" (did you mean {close[0]}?)" if close else ""
             raise MappingError(
-                f"{self.origin}: [{self.kind}] {self.file}: no column '{column}' "
-                f"for {purpose}{hint}. The file has: {', '.join(header)}"
+                f"{self.origin}: [{self.kind}] {self.label}: no column '{column}' "
+                f"for {purpose}{hint}. The {self.form} has: {', '.join(header)}"
             )
 
         resolved = {
@@ -244,7 +269,7 @@ class BoundSection:
 
     def notes(self) -> list[str]:
         """What a person setting up the mapping should know about this file."""
-        name = self.section.file
+        name = self.section.label
         notes: list[str] = []
         for (target, text), count in sorted(self.untranslated.items()):
             spec = self.section.fields[target]
@@ -273,6 +298,16 @@ class Mapping:
 
     def of(self, kind: str) -> tuple[Section, ...]:
         return tuple(self.sections.get(kind, ()))
+
+    @property
+    def reads_database(self) -> bool:
+        """Whether the sections name tables and queries rather than files.
+
+        A mapping is one or the other, so this is decided by any section.
+        """
+        return any(
+            section.form != "file" for sections in self.sections.values() for section in sections
+        )
 
 
 def attribute_name(header: str) -> str:
@@ -321,14 +356,34 @@ def parse_mapping(data: MappingType[str, Any], path: str | Path | None = None) -
         raise MappingError(
             f"{origin}: no [[devices]] section; a mapping has to say where the equipment is"
         )
+
+    forms = {section.form != "file" for entries in sections.values() for section in entries}
+    if len(forms) > 1:
+        raise MappingError(
+            f"{origin}: some sections name a file and others a table or query; "
+            "a mapping reads either CSV files or a database, not both"
+        )
     return Mapping(sections, Path(path) if path is not None else None)
 
 
 def _section(kind: str, data: MappingType[str, Any], origin: str) -> Section:
-    file = data.get("file")
-    if not isinstance(file, str) or not file.strip():
-        raise MappingError(f"{origin}: every [{kind}] section needs file = \"<name>.csv\"")
-    where = f"{origin}: [{kind}] {file}"
+    given = [key for key in SOURCES if key in data]
+    if not given:
+        raise MappingError(
+            f"{origin}: every [{kind}] section needs file = \"<name>.csv\", "
+            f"or, reading from Postgres, table = \"<schema.table>\" or query = \"SELECT ...\""
+        )
+    if len(given) > 1:
+        raise MappingError(
+            f"{origin}: a [{kind}] section sets {' and '.join(given)}; "
+            "it reads from exactly one of file, table or query"
+        )
+    form = given[0]
+    source = data[form]
+    if not isinstance(source, str) or not source.strip():
+        raise MappingError(f"{origin}: a [{kind}] section's {form} must be non-empty text")
+    section = Section(kind, source.strip(), {}, origin=origin, form=form)
+    where = f"{origin}: [{kind}] {section.label}"
 
     allowed = TARGETS[kind]
     unknown = [key for key in data if key not in allowed and key not in _SETTINGS]
@@ -356,7 +411,7 @@ def _section(kind: str, data: MappingType[str, Any], origin: str) -> Section:
     elif not isinstance(extras, bool):
         raise MappingError(f"{where}: extras must be true, false, or a list of column names")
 
-    return Section(kind, file, fields, extras, origin)
+    return Section(kind, section.source, fields, extras, origin, form)
 
 
 def _field(target: str, raw: Any, where: str) -> FieldSpec:
