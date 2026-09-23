@@ -23,6 +23,7 @@ the network actually changed.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Iterable, Sequence
 from xml.etree import ElementTree as ET
@@ -214,7 +215,7 @@ def _header(selection: _Selection) -> str:
 
 
 def _write_device(root: ET.Element, selection: _Selection, device: Device) -> None:
-    element = _identified(root, device.CIM_CLASS, device.mrid)
+    element = _identified(root, _cim_class(device), device.mrid)
     _text(element, CIM_NS, "IdentifiedObject.name", device.name)
 
     if device.feeder and device.feeder in selection.by_mrid:
@@ -256,6 +257,18 @@ def _write_device(root: ET.Element, selection: _Selection, device: Device) -> No
         _text(element, GRIDQL_NS, "state", device.state)
 
     _extras(element, device)
+
+
+_CLASS_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+
+
+def _cim_class(device: Device) -> str:
+    """Equipment read from CIM under a class GridQL does not model goes back
+    out under that class, so an EnergySource is still one to the next tool."""
+    recorded = device.attribute("cim_class")
+    if isinstance(recorded, str) and _CLASS_NAME.match(recorded):
+        return recorded
+    return device.CIM_CLASS
 
 
 def _write_transformer_ends(

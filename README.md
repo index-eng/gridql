@@ -765,9 +765,30 @@ of a network reproduces it exactly, which the test suite asserts object by objec
 **Reading other people's CIM.** The importer reads any CIM release's namespace (the cim16 URI or
 CIM17's `CIM100`), understands the specialisations other tools emit (`LoadBreakSwitch`,
 `Disconnector`, `ConformLoad`, …), merges a resource described more than once (`rdf:ID`, then
-`rdf:about`), reports any class or namespace it does not read rather than dropping it silently, and — when no head is recorded — infers the feeder head from the single
-breaker on the feeder, saying so. If it cannot, it tells you `DOWNSTREAM OF` will come back empty
-for that feeder rather than inventing an answer.
+`rdf:about`), and reports any class or namespace it does not read rather than dropping it silently.
+It reads the way distribution tools write a feeder:
+
+- **Where power enters.** A feeder with an `EnergySource` is headed by it. Failing that, the importer
+  infers the head from the single breaker on the feeder, and says so. If it cannot, it tells you
+  `DOWNSTREAM OF` will come back empty for that feeder rather than inventing an answer.
+- **Equipment GridQL has no class for** — an `EnergySource`, a `SeriesCompensator`, an inverter — still
+  has terminals, and dropping it would cut the circuit wherever it stands in series. It is kept as a
+  plain device whose `cim_class` is the one the document used (`FIND devices WHERE cim_class =
+  EnergySource`), and export writes it back out under that class.
+- **Phasing** comes from the per-phase objects CIM hangs off equipment on fewer than three phases
+  (`ACLineSegmentPhase`, `EnergyConsumerPhase`, `SwitchPhase`, `ShuntCompensatorPhase`), and a
+  transformer takes the phasing of its primary tank ends. The two legs of a 120/240 V service are
+  written `s1s2`, as CIM names them.
+- **Transformers built from tanks** — a bank of single-phase units, or a pole-top service
+  transformer — are rated from their `TransformerTankInfo` datasheets; a bank's kVA is the sum of its
+  tanks'.
+- **Capacitors** are rated from their susceptance, `bPerSection × nomU²` over every section, and a bank
+  with no sections switched in is open.
+
+These are tested against the IEEE 13, 123 and 8500-node feeders as GridAPPS-D publishes them — CIM
+written by another tool, checked against what those feeders are published to contain. The files are
+not in the repository; `python3 tests/reference/fetch.py` downloads them, pinned to a commit and
+checked by digest, and those tests skip until it has run.
 
 ```python
 from gridql import read_cim

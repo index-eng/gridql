@@ -609,7 +609,10 @@ selected equipment — so the document stands on its own.
 
 The importer reads CIM from other tools, understands the specialisations they emit
 (`LoadBreakSwitch`, `Disconnector`, `ConformLoad`, …), and reports anything it does not model
-instead of dropping it silently.
+instead of dropping it silently. It has been tested against the IEEE 13, 123 and 8500-node test feeders as
+GridAPPS-D publishes them: it finds each feeder's source, keeps equipment it has no class for so the
+circuit stays whole, and reads phasing, tank-built transformers and capacitor ratings the way
+distribution tools write them.
 
 ### Using it from Python
 
@@ -659,6 +662,7 @@ save_network(network, "grid.sqlite")
 | `examples/` | two realistic feeders as CSV: `csv/` in GridQL's own layout, `mapped/` as a GIS might export it |
 | `project.gridqlconfig` | this repository's own project file |
 | `tests/` | the test suite |
+| `tests/reference/` | fetches the IEEE test feeders the reference-model tests read |
 | `idea.md` | the original design notes this was built from |
 
 ## Not built yet

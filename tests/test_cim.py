@@ -403,6 +403,193 @@ class ForeignDocumentTests(unittest.TestCase):
         self.assertTrue(any("none could be inferred" in n for n in document.report.notes))
 
 
+def _distribution_document():
+    """A feeder written the way distribution tools write CIM100.
+
+    Modelled on the GridAPPS-D exports of the IEEE test feeders: urn:uuid
+    references, an EnergySource where power enters, equipment GridQL has no
+    class for standing in series, phasing held on per-phase child objects,
+    transformers built from tanks rated by datasheet, and capacitors rated
+    by susceptance.
+
+        SRC - SC1 - SUBX - REG - BRK - L1 -+- CAP3
+                                           +- LAT -+- SVC - HOUSE
+                                                   +- CAPC
+    """
+    objects = []
+
+    def add(cim_class, mrid, *properties):
+        body = "".join(f"\n    {p}" for p in properties)
+        objects.append(
+            f'  <cim:{cim_class} rdf:about="urn:uuid:{mrid}">\n'
+            f"    <cim:IdentifiedObject.mRID>{mrid}</cim:IdentifiedObject.mRID>{body}\n"
+            f"  </cim:{cim_class}>"
+        )
+
+    def ref(name, target):
+        return f'<cim:{name} rdf:resource="urn:uuid:{target}"/>'
+
+    def kind(name, value):
+        return f'<cim:{name} rdf:resource="http://iec.ch/TC57/CIM100#{value}"/>'
+
+    def value(name, text):
+        return f"<cim:{name}>{text}</cim:{name}>"
+
+    def equipment(cim_class, mrid, volts, *properties):
+        add(cim_class, mrid, value("IdentifiedObject.name", mrid.lower()),
+            ref("Equipment.EquipmentContainer", "F1"),
+            *([ref("ConductingEquipment.BaseVoltage", volts)] if volts else []), *properties)
+
+    add("Substation", "S1", value("IdentifiedObject.name", "station"))
+    add("Feeder", "F1", value("IdentifiedObject.name", "circuit"),
+        ref("Feeder.NormalEnergizingSubstation", "S1"))
+    for mrid, volts in (("BV115", 115000), ("BV4", 4160)):
+        add("BaseVoltage", mrid, value("BaseVoltage.nominalVoltage", volts))
+
+    equipment("EnergySource", "SRC", "BV115", value("EnergySource.nominalVoltage", 115000))
+    equipment("SeriesCompensator", "SC1", "BV115")
+    equipment("PowerTransformer", "SUBX", None)
+    for number, volts, base in ((1, 115000, "BV115"), (2, 4160, "BV4")):
+        add("PowerTransformerEnd", f"SUBX_{number}", ref("PowerTransformerEnd.PowerTransformer", "SUBX"),
+            value("TransformerEnd.endNumber", number), value("PowerTransformerEnd.ratedS", 5000000),
+            value("PowerTransformerEnd.ratedU", volts), ref("TransformerEnd.BaseVoltage", base))
+    equipment("Breaker", "BRK", "BV4", value("Switch.normalOpen", "false"))
+    equipment("ACLineSegment", "L1", "BV4", value("Conductor.length", 100))
+    equipment("ACLineSegment", "LAT", "BV4", value("Conductor.length", 50))
+    add("ACLineSegmentPhase", "LAT_B", kind("ACLineSegmentPhase.phase", "SinglePhaseKind.B"),
+        ref("ACLineSegmentPhase.ACLineSegment", "LAT"))
+    equipment("LinearShuntCompensator", "CAP3", "BV4", value("ShuntCompensator.nomU", 4160),
+              value("LinearShuntCompensator.bPerSection", 0.034670858),
+              value("ShuntCompensator.maximumSections", 1), value("ShuntCompensator.sections", 1))
+    equipment("LinearShuntCompensator", "CAPC", "BV4", value("ShuntCompensator.nomU", 2400),
+              value("LinearShuntCompensator.bPerSection", 0.017361111),
+              value("ShuntCompensator.maximumSections", 1),
+              value("ShuntCompensator.normalSections", 1), value("ShuntCompensator.sections", 0))
+    add("LinearShuntCompensatorPhase", "CAPC_C", kind("ShuntCompensatorPhase.phase", "SinglePhaseKind.C"),
+        ref("ShuntCompensatorPhase.ShuntCompensator", "CAPC"))
+    equipment("EnergyConsumer", "HOUSE", None, value("EnergyConsumer.p", 5000))
+    for leg in ("s1", "s2"):
+        add("EnergyConsumerPhase", f"HOUSE_{leg}", kind("EnergyConsumerPhase.phase", f"SinglePhaseKind.{leg}"),
+            ref("EnergyConsumerPhase.EnergyConsumer", "HOUSE"))
+
+    # Tank-built transformers: a bank of three single-phase regulators and a
+    # single-phase service transformer, each rated only by its datasheet.
+    for sheet, ends in (("REG_INFO", ((1, 1666000, 2400), (2, 1666000, 2400))),
+                        ("SVC_INFO", ((1, 25000, 2400), (2, 25000, 120), (3, 25000, 120)))):
+        add("TransformerTankInfo", sheet)
+        for number, rated_s, rated_u in ends:
+            add("TransformerEndInfo", f"{sheet}_{number}",
+                ref("TransformerEndInfo.TransformerTankInfo", sheet),
+                value("TransformerEndInfo.endNumber", number),
+                value("TransformerEndInfo.ratedS", rated_s), value("TransformerEndInfo.ratedU", rated_u))
+    equipment("PowerTransformer", "REG", None)
+    equipment("PowerTransformer", "SVC", None)
+    for tank, owner, sheet, phasing in (("REG_A", "REG", "REG_INFO", ("AN", "AN")),
+                                        ("REG_B", "REG", "REG_INFO", ("BN", "BN")),
+                                        ("REG_C", "REG", "REG_INFO", ("CN", "CN")),
+                                        ("SVC_T", "SVC", "SVC_INFO", ("BN", "s1N"))):
+        add("TransformerTank", tank, ref("TransformerTank.PowerTransformer", owner),
+            ref("TransformerTank.TransformerTankInfo", sheet))
+        for number, phases in enumerate(phasing, start=1):
+            add("TransformerTankEnd", f"{tank}_{number}", ref("TransformerTankEnd.TransformerTank", tank),
+                value("TransformerEnd.endNumber", number),
+                kind("TransformerTankEnd.orderedPhases", f"OrderedPhaseCodeKind.{phases}"),
+                ref("TransformerEnd.BaseVoltage", "BV4"))
+
+    wiring = {
+        "N0": ("SRC", "SC1"), "N1": ("SC1", "SUBX"), "N2": ("SUBX", "REG"), "N3": ("REG", "BRK"),
+        "N4": ("BRK", "L1", "CAP3"), "N5": ("L1", "LAT", "CAPC"), "N6": ("LAT", "SVC"),
+        "N7": ("SVC", "HOUSE"),
+    }
+    for node, members in wiring.items():
+        add("ConnectivityNode", node)
+        for member in members:
+            add("Terminal", f"T_{member}_{node}", ref("Terminal.ConductingEquipment", member),
+                ref("Terminal.ConnectivityNode", node))
+
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<rdf:RDF xmlns:cim="http://iec.ch/TC57/CIM100#" '
+        'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+        + "\n".join(objects)
+        + "\n</rdf:RDF>\n"
+    )
+
+
+DISTRIBUTION = _distribution_document()
+
+
+class DistributionModelTests(unittest.TestCase):
+    """What the GridAPPS-D exports of the IEEE test feeders taught the importer."""
+
+    def setUp(self):
+        self.document = loads_cim(DISTRIBUTION)
+        self.network = self.document.network
+
+    def query(self, text):
+        return execute(self.network, text).mrids
+
+    def test_the_energy_source_heads_the_feeder(self):
+        self.assertEqual(self.network.get("F1").head, "SRC")
+        self.assertTrue(any("EnergySource SRC" in note for note in self.document.report.notes))
+
+    def test_a_breaker_partway_down_is_not_mistaken_for_the_head(self):
+        self.assertEqual(self.query('FIND devices UPSTREAM OF "BRK"'), ["REG", "SUBX", "SC1", "SRC"])
+
+    def test_equipment_without_a_gridql_class_keeps_the_circuit_whole(self):
+        # SC1 stands in series between the source and everything else.
+        self.assertEqual(self.query("FIND devices WHERE NOT energized"), [])
+        self.assertEqual(self.query("FIND devices WHERE cim_class = SeriesCompensator"), ["SC1"])
+        self.assertEqual(self.network.get("SC1").TYPE, "device")
+
+    def test_two_sources_on_a_feeder_are_not_guessed_between(self):
+        second = DISTRIBUTION.replace(
+            '<cim:SeriesCompensator rdf:about="urn:uuid:SC1">',
+            '<cim:EnergySource rdf:about="urn:uuid:SC1">',
+        ).replace("</cim:SeriesCompensator>", "</cim:EnergySource>")
+        network = loads_cim(second).network
+        self.assertEqual(network.get("F1").head, "BRK")  # the only-breaker fallback
+
+    def test_phasing_comes_from_the_per_phase_objects(self):
+        phases = {mrid: self.network.get(mrid).phases for mrid in ("L1", "LAT", "CAPC", "HOUSE")}
+        self.assertEqual(phases, {"L1": "ABC", "LAT": "B", "CAPC": "C", "HOUSE": "s1s2"})
+
+    def test_a_transformer_takes_the_phasing_of_its_primary_tank_ends(self):
+        self.assertEqual(self.network.get("SVC").phases, "B")
+        self.assertEqual(self.network.get("REG").phases, "ABC")
+
+    def test_a_tank_transformer_is_rated_by_its_datasheet(self):
+        service = self.network.get("SVC")
+        self.assertEqual(
+            (service.kva, service.primary_voltage, service.secondary_voltage), (25.0, 2.4, 0.12)
+        )
+
+    def test_a_bank_of_tanks_is_rated_as_their_sum(self):
+        regulator = self.network.get("REG")
+        self.assertEqual(regulator.kva, 4998.0)
+        self.assertEqual(regulator.voltage, 4.16)  # the system's, not one winding's
+
+    def test_a_capacitor_is_rated_from_its_susceptance(self):
+        self.assertEqual(self.network.get("CAP3").kvar, 600.0)
+        self.assertEqual(self.network.get("CAPC").kvar, 100.0)
+
+    def test_a_capacitor_with_no_sections_in_is_open(self):
+        bank = self.network.get("CAPC")
+        self.assertEqual((bank.normal_state, bank.state), ("CLOSED", "OPEN"))
+        self.assertEqual(self.network.get("CAP3").state, "CLOSED")
+
+    def test_descriptive_classes_are_consumed_not_reported(self):
+        for name in ("TransformerTank", "TransformerTankEnd", "TransformerTankInfo",
+                     "TransformerEndInfo", "ACLineSegmentPhase", "EnergyConsumerPhase",
+                     "LinearShuntCompensatorPhase"):
+            self.assertNotIn(name, self.document.report.ignored)
+
+    def test_equipment_goes_back_out_under_the_class_it_came_in_as(self):
+        document = export_network(self.network)
+        self.assertEqual([e.get(f"{RDF}ID") for e in elements(document, "EnergySource")], ["SRC"])
+        self.assertEqual(snapshot(loads_cim(document).network), snapshot(self.network))
+
+
 class OtherReleaseTests(unittest.TestCase):
     CIM100 = "http://iec.ch/TC57/CIM100#"
 

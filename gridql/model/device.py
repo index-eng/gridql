@@ -83,6 +83,9 @@ class GridObject:
         if key == "type":
             return self.TYPE
         if key == "cim_class":
+            # Equipment GridQL has no class for keeps the one its source named.
+            if self.CIM_CLASS == "ConductingEquipment":
+                return self.extras.get("cim_class") or self.CIM_CLASS
             return self.CIM_CLASS
         if key in field_names(type(self)):
             return getattr(self, key)

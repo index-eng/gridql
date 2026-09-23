@@ -13,6 +13,7 @@ on it.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from ..model.feeder import Feeder, Substation
 from ..units import convert
 from .vocabulary import (
     CIM_NS,
+    CIM_TO_MODEL,
     EXT_EXTRAS,
     EXT_HEAD,
     EXT_IS_TIE,
@@ -282,10 +284,24 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
             heads[record.mrid] = resolve(record.reference(GRIDQL_NS, EXT_HEAD))
             report.feeders += 1
 
-    ends = _transformer_ends(grouped, resolve)
+    ends = _transformer_ends(grouped, resolve, base_voltages)
+    phases_of = _phases(grouped, resolve)
+    wired = {
+        resolve(record.reference(CIM_NS, "Terminal.ConductingEquipment"))
+        for record in grouped.get("Terminal", [])
+    }
 
     for record in records:
         cls = model_class_for(record.cim_class)
+        if (
+            cls is None
+            and record.cim_class not in STRUCTURAL_CLASSES
+            and (record.mrid in wired or record.value(GRIDQL_NS, EXT_EXTRAS))
+        ):
+            # Equipment GridQL has no class for -- an EnergySource, a series
+            # compensator, an inverter -- still has terminals, and dropping
+            # it would cut the circuit wherever it stands in series.
+            cls = Device
         if cls is None:
             if record.cim_class not in STRUCTURAL_CLASSES:
                 report.ignored[record.cim_class] = report.ignored.get(record.cim_class, 0) + 1
@@ -310,10 +326,14 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
             "substation": substation_mrid,
             "extras": _extras(record),
         }
-        phases = record.value(GRIDQL_NS, EXT_PHASES)
+        if cls is Device and record.cim_class not in CIM_TO_MODEL:
+            fields["extras"] = {"cim_class": record.cim_class, **fields["extras"]}
+        phases = record.value(GRIDQL_NS, EXT_PHASES) or phases_of.get(record.mrid)
         if phases:
             fields["phases"] = phases
         fields.update(_type_fields(cls, record, ends))
+        if fields["voltage"] is None and issubclass(cls, Transformer):
+            fields["voltage"] = ends.get(record.mrid, {}).get(1, {}).get("base_voltage")
 
         network.add(cls(mrid=record.mrid, **fields))
         report.devices += 1
@@ -324,21 +344,136 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
 
 
 def _transformer_ends(
-    grouped: dict[str, list[_Record]], resolve
+    grouped: dict[str, list[_Record]], resolve, base_voltages: dict[str, float | None]
 ) -> dict[str, dict[int, dict[str, float | None]]]:
-    """Ratings gathered from PowerTransformerEnd, keyed by transformer mRID."""
+    """Ratings gathered from a transformer's windings, keyed by its mRID.
+
+    CIM describes a transformer one of two ways. A PowerTransformerEnd
+    carries its own ratedS and ratedU. A transformer built from tanks -- a
+    bank of single-phase units, or one pole-top unit -- carries none: each
+    TransformerTank points at a TransformerTankInfo datasheet, and the
+    ratings are on that datasheet's TransformerEndInfo. A bank's rating is
+    the sum of its tanks'.
+    """
     ends: dict[str, dict[int, dict[str, float | None]]] = {}
+
+    def winding(owner: str, number: int) -> dict[str, float | None]:
+        return ends.setdefault(owner, {}).setdefault(
+            number, {"ratedS": None, "ratedU": None, "base_voltage": None}
+        )
+
+    def base_voltage(record: _Record) -> float | None:
+        volts = base_voltages.get(record.reference(CIM_NS, "TransformerEnd.BaseVoltage"))
+        return None if volts is None else volts / 1000.0
+
     for cim_class in ("PowerTransformerEnd", "TransformerEnd"):
         for record in grouped.get(cim_class, []):
             owner = resolve(record.reference(CIM_NS, "PowerTransformerEnd.PowerTransformer"))
             if owner is None:
                 continue
             number = int(_float(record.value(CIM_NS, "TransformerEnd.endNumber")) or 0)
-            ends.setdefault(owner, {})[number] = {
-                "ratedS": _float(record.value(CIM_NS, "PowerTransformerEnd.ratedS")),
-                "ratedU": _float(record.value(CIM_NS, "PowerTransformerEnd.ratedU")),
-            }
+            end = winding(owner, number)
+            end["ratedS"] = _float(record.value(CIM_NS, "PowerTransformerEnd.ratedS"))
+            end["ratedU"] = _float(record.value(CIM_NS, "PowerTransformerEnd.ratedU"))
+            end["base_voltage"] = base_voltage(record)
+
+    datasheets: dict[str, dict[int, _Record]] = {}
+    for record in grouped.get("TransformerEndInfo", []):
+        sheet = record.reference(CIM_NS, "TransformerEndInfo.TransformerTankInfo")
+        number = int(_float(record.value(CIM_NS, "TransformerEndInfo.endNumber")) or 0)
+        if sheet is not None:
+            datasheets.setdefault(sheet, {})[number] = record
+
+    self_rated = {
+        owner for owner, windings in ends.items()
+        if any(end["ratedS"] is not None for end in windings.values())
+    }
+    tank_owner: dict[str, str] = {}
+    for tank in grouped.get("TransformerTank", []):
+        owner = resolve(tank.reference(CIM_NS, "TransformerTank.PowerTransformer"))
+        if owner is None or owner in self_rated:
+            continue
+        tank_owner[tank.xml_id] = owner
+        sheet = tank.reference(CIM_NS, "TransformerTank.TransformerTankInfo") or tank.reference(
+            CIM_NS, "PowerSystemResource.AssetDatasheet"
+        )
+        for number, info in datasheets.get(sheet, {}).items():
+            end = winding(owner, number)
+            rated_s = _float(info.value(CIM_NS, "TransformerEndInfo.ratedS"))
+            if rated_s is not None:
+                end["ratedS"] = (end["ratedS"] or 0.0) + rated_s
+            if end["ratedU"] is None:
+                end["ratedU"] = _float(info.value(CIM_NS, "TransformerEndInfo.ratedU"))
+
+    for record in grouped.get("TransformerTankEnd", []):
+        owner = tank_owner.get(record.reference(CIM_NS, "TransformerTankEnd.TransformerTank") or "")
+        number = int(_float(record.value(CIM_NS, "TransformerEnd.endNumber")) or 0)
+        if owner is not None and winding(owner, number)["base_voltage"] is None:
+            winding(owner, number)["base_voltage"] = base_voltage(record)
+
     return ends
+
+
+#: Where each kind of per-phase object names its equipment and its phase.
+_PHASE_RECORDS = (
+    ("ACLineSegmentPhase", "ACLineSegmentPhase.ACLineSegment", "ACLineSegmentPhase.phase"),
+    ("EnergyConsumerPhase", "EnergyConsumerPhase.EnergyConsumer", "EnergyConsumerPhase.phase"),
+    ("SwitchPhase", "SwitchPhase.Switch", "SwitchPhase.phaseSide1"),
+    ("ShuntCompensatorPhase", "ShuntCompensatorPhase.ShuntCompensator",
+     "ShuntCompensatorPhase.phase"),
+    ("LinearShuntCompensatorPhase", "ShuntCompensatorPhase.ShuntCompensator",
+     "ShuntCompensatorPhase.phase"),
+)
+
+#: Phase letters in the order GridQL writes them. The neutral is left out,
+#: as it is in "ABC"; s1 and s2 are the two legs of a split-phase service.
+_PHASE_ORDER = ("A", "B", "C", "s1", "s2")
+_PHASE_TOKEN = re.compile(r"s1|s2|[ABCN]")
+
+
+def _phases(grouped: dict[str, list[_Record]], resolve) -> dict[str, str]:
+    """Each device's phasing, read from the per-phase objects that describe it.
+
+    CIM gives equipment no phase attribute. Equipment on fewer than three
+    phases has a child object per phase instead, and equipment with none is
+    three-phase -- which is also GridQL's default, so only the devices that
+    have them need an answer here. A transformer takes the phasing of its
+    primary tank ends.
+    """
+    found: dict[str, set[str]] = {}
+    for cim_class, owner_name, phase_name in _PHASE_RECORDS:
+        for record in grouped.get(cim_class, []):
+            owner = resolve(record.reference(CIM_NS, owner_name))
+            phase = _enumeration(record.reference(CIM_NS, phase_name))
+            if owner is not None and phase in _PHASE_ORDER:
+                found.setdefault(owner, set()).add(phase)
+
+    tanks = {
+        tank.xml_id: resolve(tank.reference(CIM_NS, "TransformerTank.PowerTransformer"))
+        for tank in grouped.get("TransformerTank", [])
+    }
+    for record in grouped.get("TransformerTankEnd", []):
+        if int(_float(record.value(CIM_NS, "TransformerEnd.endNumber")) or 0) != 1:
+            continue
+        owner = tanks.get(record.reference(CIM_NS, "TransformerTankEnd.TransformerTank") or "")
+        ordered = _enumeration(record.reference(CIM_NS, "TransformerTankEnd.orderedPhases"))
+        if owner is not None and ordered:
+            found.setdefault(owner, set()).update(
+                token for token in _PHASE_TOKEN.findall(ordered) if token != "N"
+            )
+
+    return {
+        owner: "".join(phase for phase in _PHASE_ORDER if phase in phases)
+        for owner, phases in found.items()
+        if phases
+    }
+
+
+def _enumeration(reference: str | None) -> str | None:
+    """``http://iec.ch/TC57/CIM100#SinglePhaseKind.A`` -> ``A``."""
+    if not reference:
+        return None
+    return reference.rsplit("#", 1)[-1].rsplit(".", 1)[-1]
 
 
 def _type_fields(cls: type, record: _Record, ends: dict) -> dict[str, Any]:
@@ -380,14 +515,43 @@ def _type_fields(cls: type, record: _Record, ends: dict) -> dict[str, Any]:
 
     elif issubclass(cls, Capacitor):
         fields["kvar"] = _float(record.value(GRIDQL_NS, "kvar"))
-        normal_state = record.value(GRIDQL_NS, "normalState")
+        if fields["kvar"] is None:
+            fields["kvar"] = _capacitor_kvar(record)
+        normal_state = record.value(GRIDQL_NS, "normalState") or _in_service(
+            record.value(CIM_NS, "ShuntCompensator.normalSections")
+        )
         if normal_state:
             fields["normal_state"] = normal_state
-        state = record.value(GRIDQL_NS, "state")
+        state = record.value(GRIDQL_NS, "state") or _in_service(
+            record.value(CIM_NS, "ShuntCompensator.sections")
+        )
         if state:
             fields["state"] = state
 
     return fields
+
+
+def _capacitor_kvar(record: _Record) -> float | None:
+    """A bank's rating from its susceptance: Q = B * U^2 over every section.
+
+    bPerSection is the positive-sequence susceptance, so with nomU line to
+    line this is the three-phase total, and with a single-phase bank's
+    nomU it is that bank's rating.
+    """
+    susceptance = _float(record.value(CIM_NS, "LinearShuntCompensator.bPerSection"))
+    volts = _float(record.value(CIM_NS, "ShuntCompensator.nomU"))
+    if susceptance is None or volts is None:
+        return None
+    sections = _float(record.value(CIM_NS, "ShuntCompensator.maximumSections")) or 1.0
+    return round(susceptance * volts * volts * sections / 1000.0, 3)
+
+
+def _in_service(sections: str | None) -> str | None:
+    """A capacitor with no sections switched in is open."""
+    count = _float(sections)
+    if count is None:
+        return None
+    return "CLOSED" if count > 0 else "OPEN"
 
 
 def _connect(network: Network, grouped: dict[str, list[_Record]], resolve, report) -> int:
@@ -417,6 +581,17 @@ def _assign_heads(network: Network, heads: dict[str, str | None], report: Import
         recorded = heads.get(feeder.mrid)
         if recorded and recorded in network.objects:
             feeder.head = recorded
+            continue
+        # An EnergySource is the document saying where power enters, which
+        # beats any guess from the equipment around it.
+        sources = [
+            device.mrid
+            for device in network.devices
+            if device.feeder == feeder.mrid and device.extras.get("cim_class") == "EnergySource"
+        ]
+        if len(sources) == 1:
+            feeder.head = sources[0]
+            report.notes.append(f"{feeder.mrid}: headed by its EnergySource {sources[0]}")
     report.notes.extend(network.infer_heads())
 
 
