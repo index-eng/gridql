@@ -17,6 +17,7 @@ from typing import Any, Iterator, Mapping
 
 from ..errors import GridQLError, GridQLNameError, UnitError
 from ..model import MISSING, GridObject, Network
+from ..model.device import field_names
 from ..model.types import attribute_universe, canonical_unit, class_for, plural, resolve_type
 from ..units import convert
 from .ast import (
@@ -139,22 +140,38 @@ class Result:
         return [obj.mrid for obj in self.objects]
 
     def columns(self) -> list[str]:
-        """The columns to render: the SELECT list, or the classes' own.
+        """The columns to render.
 
-        A selected column keeps the spelling the query used, so
-        ``SELECT mRID`` produces an ``mRID`` header and ``SUM(kva)`` a
-        ``SUM(kva)`` one, even though attribute lookup is case-insensitive.
+        * A SELECT list, in its order. A selected column keeps the spelling
+          the query used, so ``SELECT mRID`` produces an ``mRID`` header and
+          ``SUM(kva)`` a ``SUM(kva)`` one, even though lookup ignores case.
+        * No SELECT: the classes' own columns, then whatever the query
+          filtered or sorted on, so an answer shows the evidence for itself.
+        * ``SELECT *``: everything the objects carry -- the classes' own
+          columns, their other fields, then the utility's own columns.
         """
         select = self.select
-        if select is not None and [i.attribute for i in select] != ["*"]:
+        starred = select is not None and [i.attribute for i in select] == ["*"]
+        if select is not None and not starred:
             return [item.written for item in select]
 
-        columns: list[str] = []
+        columns = _Columns()
         for obj in self.objects:
-            for column in obj.COLUMNS:
-                if column not in columns:
-                    columns.append(column)
-        return columns
+            columns.extend(obj.COLUMNS)
+
+        if starred:
+            for obj in self.objects:
+                columns.extend(sorted(field_names(type(obj)) - set(obj.COLUMNS)))
+            for obj in self.objects:
+                columns.extend(obj.extras)
+        else:
+            columns.extend(_tested(self.query.where))
+            columns.extend(
+                key.item.written
+                for key in self.query.order_by or ()
+                if not key.item.is_aggregate
+            )
+        return columns.names
 
     def rows(self) -> list[dict[str, Any]]:
         """One mapping per object, every object answering every column.
@@ -179,6 +196,24 @@ class Result:
                 value_of[column] = None if value is MISSING else value
             rows.append(value_of)
         return rows
+
+
+class _Columns:
+    """An ordered list of column names that ignores case when deduplicating.
+
+    The first spelling wins, so a filter on ``KVA`` does not add a second
+    kva column beside the class's own.
+    """
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+        self._seen: set[str] = set()
+
+    def extend(self, names) -> None:
+        for name in names:
+            if name.lower() not in self._seen:
+                self._seen.add(name.lower())
+                self.names.append(name)
 
 
 def execute(network: Network, source: str) -> Result:

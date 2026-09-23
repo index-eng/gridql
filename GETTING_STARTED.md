@@ -257,10 +257,14 @@ neighbouring circuit carry what it picks up?
 
 ### Output you can use
 
-`--format table` (the default), `json`, `csv`, or `cim`. `SELECT` picks the columns:
+`--format table` (the default), `json`, `csv`, or `cim`. Without `SELECT` you get the type's usual
+columns plus anything the query filtered or sorted on, so `WHERE install_year < 2000` shows
+`install_year`. `SELECT` picks the columns exactly, and `SELECT *` shows everything, your own
+columns included:
 
 ```bash
 gridql --format csv 'FIND transformers SELECT mRID, name, kva'
+gridql 'FIND transformers SELECT *'
 ```
 
 ### Checking a model before you trust it

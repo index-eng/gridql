@@ -33,10 +33,40 @@ class SelectTests(unittest.TestCase):
         self.assertEqual(result.columns(), ["mRID"])
         self.assertEqual(result.rows()[0]["mRID"], "XFMR-001")
 
-    def test_select_star_falls_back_to_the_default_columns(self):
+    def test_select_star_shows_everything_the_objects_carry(self):
+        self.network.get("XFMR-001").extras["install_year"] = 1998
         starred = execute(self.network, "FIND transformers SELECT *").columns()
         plain = execute(self.network, "FIND transformers").columns()
-        self.assertEqual(starred, plain)
+        # The standard columns first, then the other fields, then the utility's own.
+        self.assertEqual(starred[: len(plain)], plain)
+        self.assertEqual(starred[len(plain):], ["substation", "voltage", "install_year"])
+
+    def test_select_star_over_mixed_types_is_the_union(self):
+        columns = execute(self.network, 'FIND devices FED BY "SW-002" SELECT *').columns()
+        for column in ("kva", "kw", "state", "is_tie", "substation"):
+            self.assertIn(column, columns)
+        self.assertEqual(len(columns), len({c.lower() for c in columns}))
+
+    def test_without_select_the_filtered_attribute_is_shown(self):
+        self.network.get("XFMR-001").extras["install_year"] = 1998
+        self.network.get("XFMR-002").extras["install_year"] = 2011
+        result = execute(self.network, "FIND transformers WHERE install_year > 1990")
+        self.assertEqual(result.columns()[-1], "install_year")
+        self.assertEqual([row["install_year"] for row in result.rows()], [1998, 2011])
+
+    def test_a_filter_on_a_column_already_shown_adds_nothing(self):
+        plain = execute(self.network, "FIND transformers").columns()
+        self.assertEqual(execute(self.network, "FIND transformers WHERE KVA > 100").columns(), plain)
+
+    def test_sorting_and_derived_attributes_are_shown_too(self):
+        columns = execute(
+            self.network, "FIND devices WHERE NOT energized ORDER BY depth DESC"
+        ).columns()
+        self.assertEqual(columns[-2:], ["energized", "depth"])
+
+    def test_an_explicit_select_is_exactly_what_it_says(self):
+        result = execute(self.network, "FIND transformers WHERE kva > 100 SELECT name ORDER BY depth")
+        self.assertEqual(result.columns(), ["name"])
 
     def test_a_derived_attribute_can_be_selected(self):
         rows = execute(self.network, "FIND loads SELECT mrid, energized").rows()

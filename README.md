@@ -169,12 +169,19 @@ value does not match: `FIND devices WHERE kva >= 500` passes over the loads, whi
 
 ### SELECT
 
-By default a query returns the columns that suit the type. `SELECT` picks them instead, in the
-order given, and column headers keep the spelling you wrote — so `SELECT mRID` produces an `mRID`
-header even though attribute lookup is case-insensitive. `SELECT *` is the default set.
+By default a query returns the columns that suit the type, **plus whatever it filtered or sorted
+on**, so an answer shows its own evidence: `FIND transformers WHERE install_year < 2000` ends with
+an `install_year` column, and `WHERE NOT energized` with `energized`. A filter on a column already
+shown adds nothing.
+
+`SELECT` picks the columns instead, in the order given, and column headers keep the spelling you
+wrote — so `SELECT mRID` produces an `mRID` header even though attribute lookup is
+case-insensitive. `SELECT *` shows everything the results carry: the usual columns, the type's
+other fields, then the utility's own columns.
 
 ```
 FIND transformers SELECT name, mRID, kva, primary_voltage, secondary_voltage
+FIND transformers SELECT *
 ```
 
 A selected attribute the object does not have comes back empty rather than being dropped, so
