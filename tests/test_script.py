@@ -15,6 +15,16 @@ from gridql.lang import execute_script
 from gridql.config import CONFIG_NAME, load_config
 from gridql.script import find_scripts, read_script, run_file
 
+try:
+    from isolation import sample_project
+except ImportError:  # run as tests.<module> rather than by discovery
+    from .isolation import sample_project
+
+
+def setUpModule():
+    unittest.enterModuleContext(sample_project())
+
+
 REPO = Path(__file__).resolve().parent.parent
 QUERIES = REPO / "queries"
 
@@ -198,9 +208,9 @@ class FileTests(unittest.TestCase):
         self.assertEqual(names, sorted(names))
 
     def test_every_bundled_query_runs(self):
-        # The project file beside them supplies the parameters they require,
-        # which is how they are meant to be run.
-        params = load_config(REPO / CONFIG_NAME).params
+        # A project file supplies the parameters they require, which is how
+        # they are meant to be run: here, the sample project's.
+        params = load_config(Path.cwd() / CONFIG_NAME).params
         for path in find_scripts(QUERIES):
             with self.subTest(query=path.name):
                 script = read_script(path)

@@ -13,6 +13,16 @@ from gridql.cli import main
 from gridql.ingest import CsvError, read_csv, write_csv
 from gridql.model import Device, Switch, Transformer
 
+try:
+    from isolation import sample_project
+except ImportError:  # run as tests.<module> rather than by discovery
+    from .isolation import sample_project
+
+
+def setUpModule():
+    unittest.enterModuleContext(sample_project())
+
+
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples" / "csv"
 
 

@@ -15,6 +15,16 @@ from gridql.cim.vocabulary import CIM_NS, GRIDQL_NS, RDF_NS
 from gridql.cli import main
 from gridql.model import Switch
 
+try:
+    from isolation import sample_project
+except ImportError:  # run as tests.<module> rather than by discovery
+    from .isolation import sample_project
+
+
+def setUpModule():
+    unittest.enterModuleContext(sample_project())
+
+
 RDF = f"{{{RDF_NS}}}"
 CIM = f"{{{CIM_NS}}}"
 GRIDQL = f"{{{GRIDQL_NS}}}"

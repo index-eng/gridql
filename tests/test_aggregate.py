@@ -10,6 +10,15 @@ from gridql.cli import main
 from gridql.errors import GridQLError, GridQLNameError, GridQLSyntaxError
 from gridql.lang import parse
 
+try:
+    from isolation import sample_project
+except ImportError:  # run as tests.<module> rather than by discovery
+    from .isolation import sample_project
+
+
+def setUpModule():
+    unittest.enterModuleContext(sample_project())
+
 
 def tied_feeders():
     """Two feeders on one substation, so grouping has something to group."""

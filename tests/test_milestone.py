@@ -14,6 +14,15 @@ import unittest
 from gridql import build_sample_network, execute
 from gridql.cli import main
 
+try:
+    from isolation import sample_project
+except ImportError:  # run as tests.<module> rather than by discovery
+    from .isolation import sample_project
+
+
+def setUpModule():
+    unittest.enterModuleContext(sample_project())
+
 
 class MilestoneQueryTests(unittest.TestCase):
     def setUp(self):
