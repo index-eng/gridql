@@ -16,6 +16,7 @@ import json
 from typing import Any, Iterable
 
 from .cim import export_network
+from .color import PLAIN, Palette
 from .lang.ast import OUTPUT_FORMATS
 from .lang.evaluator import Result
 
@@ -43,10 +44,10 @@ def format_value(value: Any, *, empty: str = "") -> str:
     return str(value)
 
 
-def to_table(result: Result) -> str:
+def to_table(result: Result, palette: Palette = PLAIN) -> str:
     rows = result.rows()
     if not rows:
-        return f"no {result.type_name} matched"
+        return palette.paint(f"no {result.type_name} matched", "muted")
 
     columns = columns_for(rows)
     cells = [[format_value(row.get(column), empty="-") for column in columns] for row in rows]
@@ -54,17 +55,42 @@ def to_table(result: Result) -> str:
         max(len(column), *(len(cell[index]) for cell in cells))
         for index, column in enumerate(columns)
     ]
+    # Rows of equipment line up with the objects they came from; an
+    # aggregate's rows are computed and describe no one device.
+    objects = [None] * len(rows) if result.is_aggregate else result.objects
+
+    def line(values: list[str], roles: list[str | None]) -> str:
+        # Padding goes outside the paint: escape codes take no room on
+        # screen, and a painted trailing space would survive rstrip().
+        padded = [
+            (palette.paint(value, role) if role else value) + " " * (widths[i] - len(value))
+            for i, (value, role) in enumerate(zip(values, roles))
+        ]
+        return "  ".join(padded).rstrip()
 
     lines = [
-        "  ".join(column.ljust(widths[i]) for i, column in enumerate(columns)).rstrip(),
-        "  ".join("-" * width for width in widths),
+        line(columns, ["header"] * len(columns)),
+        palette.paint("  ".join("-" * width for width in widths), "muted"),
     ]
-    lines.extend(
-        "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip() for row in cells
-    )
+    for obj, row, cell in zip(objects, rows, cells):
+        lines.append(line(cell, [_role(obj, column, row.get(column)) for column in columns]))
     lines.append("")
-    lines.append(f"{len(rows)} row{'s' if len(rows) != 1 else ''}")
+    lines.append(palette.paint(f"{len(rows)} row{'s' if len(rows) != 1 else ''}", "muted"))
     return "\n".join(lines)
+
+
+def _role(obj: Any, column: str, value: Any) -> str | None:
+    """What a cell marks: an off-normal state, dead equipment, or nothing."""
+    if value is None:
+        return "muted"
+    name = column.lower()
+    if name == "energized" and value is False:
+        return "attention"
+    if name == "state" and obj is not None:
+        normal = getattr(obj, "normal_state", None)
+        if normal is not None and value != normal:
+            return "attention"
+    return None
 
 
 def to_json(result: Result) -> str:
@@ -92,7 +118,10 @@ def to_cim(result: Result) -> str:
 _RENDERERS = {"table": to_table, "json": to_json, "csv": to_csv, "cim": to_cim}
 
 
-def render(result: Result, output_format: str = "table") -> str:
+def render(result: Result, output_format: str = "table", palette: Palette = PLAIN) -> str:
+    """The result in ``output_format``. Only a table takes colour."""
+    if output_format == "table":
+        return to_table(result, palette)
     try:
         return _RENDERERS[output_format](result)
     except KeyError:
@@ -106,7 +135,9 @@ def summarize(result: Result) -> str:
     return " ".join(result.query.describe().split())
 
 
-def render_script(results: list[Result], output_format: str | None = None) -> str:
+def render_script(
+    results: list[Result], output_format: str | None = None, palette: Palette = PLAIN
+) -> str:
     """Render every statement of a script run.
 
     Two modes, because a script serves two audiences:
@@ -141,8 +172,8 @@ def render_script(results: list[Result], output_format: str | None = None) -> st
 
     chunks: list[str] = []
     for number, result in enumerate(results, start=1):
-        body = render(result, output_format or result.output_format or "table")
+        body = render(result, output_format or result.output_format or "table", palette)
         if len(results) > 1:
-            body = f"-- {number}. {summarize(result)}\n{body}"
+            body = f"{palette.paint(f'-- {number}. {summarize(result)}', 'muted')}\n{body}"
         chunks.append(body)
     return "\n\n".join(chunks)

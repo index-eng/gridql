@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterator
 
+from .color import PLAIN, Palette
 from .model import Device, Feeder, Network, Substation, Switch
 
 ERROR = "error"
@@ -42,7 +43,11 @@ class Finding:
     objects: tuple[str, ...] = ()
 
     def __str__(self) -> str:
-        return f"{self.severity:7s} {self.code:22s} {self.message}"
+        return self.format()
+
+    def format(self, palette: Palette = PLAIN) -> str:
+        severity = palette.paint(f"{self.severity:7s}", self.severity)
+        return f"{severity} {self.code:22s} {self.message}"
 
 
 @dataclass
@@ -81,12 +86,12 @@ class ValidationReport:
             f"{warnings} warning{'' if warnings == 1 else 's'}"
         )
 
-    def summary(self) -> str:
+    def summary(self, palette: Palette = PLAIN) -> str:
         if not self.findings:
-            return "no problems found"
+            return palette.paint("no problems found", "ok")
         # Errors first, then in the order they were found.
         ordered = self.errors + self.warnings
-        return "\n".join([self.counts(), "", *(str(f) for f in ordered)])
+        return "\n".join([self.counts(), "", *(f.format(palette) for f in ordered)])
 
 
 def validate(network: Network) -> ValidationReport:

@@ -285,6 +285,10 @@ gridql --format csv 'FIND transformers SELECT mRID, name, kva'
 gridql 'FIND transformers SELECT *'
 ```
 
+In a terminal the table is coloured: a switch out of its normal position and equipment that is not
+energised stand out in yellow. Piped or redirected output stays plain, and `--color never` or
+`NO_COLOR=1` turns it off.
+
 ### Checking a model before you trust it
 
 Real models arrive with problems. `validate` names them instead of letting a query quietly return

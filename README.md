@@ -27,6 +27,7 @@ New here? [**Getting started**](GETTING_STARTED.md) walks through installing it 
 python3 -m gridql.cli                                  # REPL against the example data
 python3 -m gridql.cli 'FIND reclosers'                 # one-shot query
 python3 -m gridql.cli --format json 'FIND loads'       # table (default), json or csv
+python3 -m gridql.cli --color never 'FIND switches'    # colour: auto (default), always, never
 python3 -m gridql.cli --explain 'FIND devices DOWNSTREAM OF "REC-1201-01"'
 python3 -m gridql.cli run queries/feeder_analysis.gridql   # run a saved query
 python3 -m gridql.cli run feeder_report --feeder FDR-1202  # ... with a parameter
@@ -245,6 +246,23 @@ the way its author intended. An explicit `--format` on the command line override
 `cim` is the interesting one: the result is emitted as a CIM RDF/XML document, so a query is how
 you carve a slice of the system out as a standards-based exchange file. See
 [CIM import and export](#cim-import-and-export).
+
+### Colour
+
+In a terminal, a table marks what deserves a second look: a switch or capacitor **out of its normal
+position**, and equipment that is **not energised**, both in bold yellow. Headers are bold, and
+empty cells and row counts are dimmed. Errors are red and warnings yellow, in query output and in
+`validate` alike.
+
+Colour marks what is abnormal, never a switch's position as such. Utilities do not agree on what red
+and green mean for a switch — a North American one-line draws a closed breaker red and an open one
+green, while anyone outside the industry reads red as the alarm — so colouring `OPEN` and `CLOSED`
+would mislead one reader or the other. A switch out of its normal position means the same thing
+everywhere.
+
+`--color auto` (the default) colours only a terminal, never a pipe or a file, and honours
+[`NO_COLOR`](https://no-color.org) and `FORCE_COLOR`. `--color always` and `--color never` override
+all of that. JSON, CSV and CIM are data for another program and are never coloured.
 
 ### Units
 

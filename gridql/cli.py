@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from .version import __version__
+from .color import CHOICES, PLAIN, Palette
 from .config import CONFIG_NAME, Config, project_config, resolve_script
 from .data import build_sample_network
 from .errors import GridQLError, GridQLSyntaxError
@@ -139,6 +140,7 @@ def build_config_parser() -> argparse.ArgumentParser:
         description=f"Show the {CONFIG_NAME} in effect, and the queries it points at.",
     )
     _add_config_arguments(parser)
+    _add_color_argument(parser)
     return parser
 
 
@@ -157,6 +159,26 @@ def show_config(explicit: str | None = None, disabled: bool = False) -> str:
 #: Anything else on the command line is a parameter the file declares, which
 #: is how --feeder FDR-104 can mean what the file says without gridql having
 #: heard of a feeder.
+#: The --color choice of the command being run. main() sets it, so an error
+#: raised deep inside loading data is coloured the way the command asked.
+_color = "auto"
+
+
+def _use_color(choice: str) -> None:
+    global _color
+    _color = choice
+
+
+def _stdout() -> Palette:
+    return Palette.for_stream(sys.stdout, _color)
+
+
+def _say(kind: str, message: object) -> None:
+    """An 'error:' or 'warning:' line on stderr."""
+    label = Palette.for_stream(sys.stderr, _color).paint(f"{kind}:", kind)
+    print(f"{label} {message}", file=sys.stderr)
+
+
 RUN_OPTIONS = {
     "-f": True,
     "--format": True,
@@ -165,6 +187,7 @@ RUN_OPTIONS = {
     "--config": True,
     "--mapping": True,
     "--param": True,
+    "--color": True,
     "--explain": False,
     "--no-config": False,
     "-h": False,
@@ -260,6 +283,17 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     )
     _add_mapping_argument(parser)
     _add_config_arguments(parser)
+    _add_color_argument(parser)
+
+
+def _add_color_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--color",
+        choices=CHOICES,
+        default="auto",
+        help="colour a table's header, off-normal switches and dead equipment, and errors "
+        "(default: auto -- on for a terminal, off for a pipe or file, off under NO_COLOR)",
+    )
 
 
 def _add_mapping_argument(parser: argparse.ArgumentParser) -> None:
@@ -369,7 +403,7 @@ def _warn_about_load(document, csv: str, mapping: str | None) -> None:
     command = f"gridql import-csv {shlex.quote(csv)}" + (
         f" --mapping {shlex.quote(mapping)}" if mapping else ""
     )
-    print(f"warning: {headline}", file=sys.stderr)
+    _say("warning", headline)
     print(f"  run '{command}' for the full report", file=sys.stderr)
 
 
@@ -381,13 +415,15 @@ def source_of(db: str | None, csv: str | None, config: Config | None = None) -> 
     return db or csv or "sample network FDR-104"
 
 
-def explain(network: Network, result: Result, output_format: str | None) -> str:
+def explain(
+    network: Network, result: Result, output_format: str | None, palette: Palette = PLAIN
+) -> str:
     """The parsed statement, how it will be answered, and its result."""
     query = result.query
     lines = [
-        "query:",
+        palette.paint("query:", "header"),
         *(f"  {line}" for line in query.describe().splitlines()),
-        "plan:",
+        palette.paint("plan:", "header"),
         f"  select {result.type_key} "
         f"({len(network.of_class(class_for(result.type_key)))} candidates)",
     ]
@@ -407,17 +443,21 @@ def explain(network: Network, result: Result, output_format: str | None) -> str:
         lines.append(f"  limit -> {query.limit}")
     lines.append(f"  {len(result)} matched, {len(result.rows())} row(s) out")
     lines.append("")
-    lines.append(render(result, output_format or query.return_format or "table"))
+    lines.append(render(result, output_format or query.return_format or "table", palette))
     return "\n".join(lines)
 
 
 def run_query(
-    network: Network, source: str, output_format: str | None = None, explain_plan: bool = False
+    network: Network,
+    source: str,
+    output_format: str | None = None,
+    explain_plan: bool = False,
+    palette: Palette = PLAIN,
 ) -> str:
     result = evaluate(network, parse(source))
     if explain_plan:
-        return explain(network, result, output_format)
-    return render(result, output_format or result.output_format or "table")
+        return explain(network, result, output_format, palette)
+    return render(result, output_format or result.output_format or "table", palette)
 
 
 def run_script(
@@ -427,6 +467,7 @@ def run_script(
     explain_plan: bool = False,
     params: dict[str, str] | None = None,
     defaults: dict[str, object] | None = None,
+    palette: Palette = PLAIN,
 ) -> str:
     """Run a .gridql file, binding its parameters before anything else.
 
@@ -446,8 +487,10 @@ def run_script(
     if not results:
         return f"{path} contains no statements"
     if explain_plan:
-        return "\n\n".join(explain(network, result, output_format) for result in results)
-    return render_script(results, output_format)
+        return "\n\n".join(
+            explain(network, result, output_format, palette) for result in results
+        )
+    return render_script(results, output_format, palette)
 
 
 def build_init_parser() -> argparse.ArgumentParser:
@@ -462,6 +505,7 @@ def build_init_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force", action="store_true", help="overwrite the file if it already exists"
     )
+    _add_color_argument(parser)
     return parser
 
 
@@ -495,6 +539,7 @@ def build_import_csv_parser() -> argparse.ArgumentParser:
     )
     _add_mapping_argument(parser)
     _add_config_arguments(parser)
+    _add_color_argument(parser)
     return parser
 
 
@@ -508,6 +553,7 @@ def build_export_csv_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv", metavar="PATH", default=None, help="read from these CSV files")
     _add_mapping_argument(parser)
     _add_config_arguments(parser)
+    _add_color_argument(parser)
     return parser
 
 
@@ -582,6 +628,7 @@ def build_export_parser() -> argparse.ArgumentParser:
     )
     _add_mapping_argument(parser)
     _add_config_arguments(parser)
+    _add_color_argument(parser)
     return parser
 
 
@@ -602,6 +649,7 @@ def build_import_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="replace an existing database even when the refresh checks object",
     )
+    _add_color_argument(parser)
     return parser
 
 
@@ -621,6 +669,7 @@ def build_validate_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true", help="exit non-zero on warnings as well as errors"
     )
     _add_config_arguments(parser)
+    _add_color_argument(parser)
     return parser
 
 
@@ -635,10 +684,10 @@ def run_validate(
     try:
         report = validate(network_for(db, csv, config, mapping))
     except GridQLError as error:
-        print(f"error: {error}", file=sys.stderr)
+        _say("error", error)
         return 1
 
-    print(report.summary())
+    print(report.summary(_stdout()))
     return 1 if report.errors or (strict and report.warnings) else 0
 
 
@@ -665,19 +714,23 @@ def export_cim(
 
 
 def import_cim(
-    path: str, db: str | None = None, force: bool = False, skip_checks: bool = False
+    path: str,
+    db: str | None = None,
+    force: bool = False,
+    skip_checks: bool = False,
+    palette: Palette = PLAIN,
 ) -> str:
     document = read_cim(path)
     lines = [document.report.summary()]
 
     report = validate(document.network)
     if not report:
-        lines.append("validation: no problems found")
+        lines.append(f"validation: {palette.paint('no problems found', 'ok')}")
     else:
         # 'gridql validate' cannot read a CIM file, and --db may still hold
         # the old data if the save is refused. Show the findings here instead.
         lines.append(f"validation: {report.counts()}")
-        lines.extend(f"  {finding}" for finding in report.errors + report.warnings)
+        lines.extend(f"  {finding.format(palette)}" for finding in report.errors + report.warnings)
 
     if db is not None:
         _save_import(document.network, report, db, force, skip_checks, lines)
@@ -824,6 +877,7 @@ def repl(
     config: Config | None = None,
 ) -> int:
     config = config or Config()
+    palette = _stdout()
     print(_banner(source))
     while True:
         try:
@@ -862,7 +916,7 @@ def repl(
             print(config.describe())
             continue
         if lowered == ".validate":
-            print(validate(network).summary())
+            print(validate(network).summary(palette))
             continue
         if lowered.startswith(".run"):
             parts = line.split()
@@ -880,11 +934,12 @@ def repl(
                     output_format,
                     params=parameters(assignments, {}),
                     defaults=config.params,
+                    palette=palette,
                 )
             )
             continue
 
-        _emit(lambda: run_query(network, line, output_format))
+        _emit(lambda: run_query(network, line, output_format, palette=palette))
 
 
 def _emit(produce) -> int:
@@ -892,40 +947,56 @@ def _emit(produce) -> int:
     try:
         print(produce())
     except GridQLSyntaxError as error:
-        print(error.render(), file=sys.stderr)
+        print(_paint_syntax_error(error), file=sys.stderr)
         return 1
     except GridQLError as error:
         # A refused save still read its input; what it found is the evidence.
         output = getattr(error, "output", None)
         if output:
             print(output)
-        print(f"error: {error}", file=sys.stderr)
+        _say("error", error)
         return 1
     return 0
 
 
+def _paint_syntax_error(error: GridQLSyntaxError) -> str:
+    """The message and the caret under the offending text stand out; the query does not."""
+    palette = Palette.for_stream(sys.stderr, _color)
+    lines = error.render().split("\n")
+    lines[0] = palette.paint(lines[0], "error")
+    if len(lines) > 1:
+        caret = lines[-1].rstrip()
+        lines[-1] = caret[:-1] + palette.paint(caret[-1:], "error")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
+    _use_color("auto")
 
     if argv and argv[0] == "init":
         args = build_init_parser().parse_args(argv[1:])
+        _use_color(args.color)
         return _emit(lambda: init_database(args.path, args.empty, args.force))
 
     if argv and argv[0] == "config":
         args = build_config_parser().parse_args(argv[1:])
+        _use_color(args.color)
         return _emit(lambda: show_config(args.config, args.no_config))
 
     if argv and argv[0] == "validate":
         args = build_validate_parser().parse_args(argv[1:])
+        _use_color(args.color)
         try:
             config = project_config(args.config, not args.no_config)
         except GridQLError as error:
-            print(f"error: {error}", file=sys.stderr)
+            _say("error", error)
             return 1
         return run_validate(args.db, args.strict, args.csv, config, args.mapping)
 
     if argv and argv[0] == "import-csv":
         args = build_import_csv_parser().parse_args(argv[1:])
+        _use_color(args.color)
         return _emit(
             lambda: import_csv(
                 args.path, args.db, args.force, args.mapping, _config(args), args.skip_checks
@@ -934,12 +1005,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if argv and argv[0] == "export-csv":
         args = build_export_csv_parser().parse_args(argv[1:])
+        _use_color(args.color)
         return _emit(
             lambda: export_csv(args.path, args.db, args.csv, _config(args), args.mapping)
         )
 
     if argv and argv[0] == "export-cim":
         args = build_export_parser().parse_args(argv[1:])
+        _use_color(args.color)
         return _emit(
             lambda: export_cim(
                 args.path, args.query, args.db, args.csv, _config(args), args.mapping
@@ -948,24 +1021,28 @@ def main(argv: list[str] | None = None) -> int:
 
     if argv and argv[0] == "import-cim":
         args = build_import_parser().parse_args(argv[1:])
-        return _emit(lambda: import_cim(args.path, args.db, args.force, args.skip_checks))
+        _use_color(args.color)
+        return _emit(
+            lambda: import_cim(args.path, args.db, args.force, args.skip_checks, _stdout())
+        )
 
     if argv and argv[0] == "run":
         return _emit(lambda: _run(argv[1:]))
 
     args = build_parser().parse_args(argv)
+    _use_color(args.color)
 
     try:
         config = _config(args)
         network = network_for(args.db, args.csv, config, args.mapping)
     except GridQLError as error:
-        print(f"error: {error}", file=sys.stderr)
+        _say("error", error)
         return 1
 
     if args.query is None:
         return repl(network, args.format, source_of(args.db, args.csv, config), config)
 
-    return _emit(lambda: run_query(network, args.query, args.format, args.explain))
+    return _emit(lambda: run_query(network, args.query, args.format, args.explain, _stdout()))
 
 
 def _config(args: argparse.Namespace) -> Config:
@@ -976,6 +1053,7 @@ def _run(argv: list[str]) -> str:
     """'gridql run': the file's parameters, then the file and the dataset."""
     rest, options = split_parameters(argv)
     args = build_run_parser().parse_args(rest)
+    _use_color(args.color)
     params = parameters(args.params, options)
     config = _config(args)
     return run_script(
@@ -985,6 +1063,7 @@ def _run(argv: list[str]) -> str:
         args.explain,
         params,
         config.params,
+        _stdout(),
     )
 
 
