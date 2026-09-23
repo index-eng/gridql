@@ -204,5 +204,36 @@ class RenderTests(unittest.TestCase):
             render(execute(self.network, "FIND feeders"), "xml")
 
 
+class UtilityColumnTests(unittest.TestCase):
+    """A utility's own columns compare like built-in attributes, on either side."""
+
+    def setUp(self):
+        self.network = build_sample_network()
+        self.network.get("XFMR-001").extras.update(customer_count=1, region="North", backup="South")
+        self.network.get("XFMR-002").extras.update(customer_count=14, region="South", backup="South")
+
+    def run_query(self, source):
+        return execute(self.network, source).mrids
+
+    def test_a_utility_column_on_the_right_is_an_attribute_not_text(self):
+        # Read as the text "customer_count" this matched nothing at all.
+        self.assertEqual(self.run_query("FIND transformers WHERE kva > customer_count"),
+                         ["XFMR-001", "XFMR-002"])
+        self.assertEqual(self.run_query("FIND transformers WHERE customer_count < kva"),
+                         ["XFMR-001", "XFMR-002"])
+
+    def test_two_utility_columns_compare_with_each_other(self):
+        self.assertEqual(self.run_query("FIND transformers WHERE region = backup"), ["XFMR-002"])
+        self.assertEqual(self.run_query("FIND transformers WHERE region IN (backup)"), ["XFMR-002"])
+
+    def test_quoting_still_forces_the_value_reading(self):
+        self.network.get("XFMR-001").extras["region"] = "backup"
+        self.assertEqual(self.run_query('FIND transformers WHERE region = "backup"'), ["XFMR-001"])
+
+    def test_equipment_lacking_the_column_on_the_right_does_not_match(self):
+        del self.network.get("XFMR-001").extras["customer_count"]
+        self.assertEqual(self.run_query("FIND transformers WHERE kva > customer_count"), ["XFMR-002"])
+
+
 if __name__ == "__main__":
     unittest.main()

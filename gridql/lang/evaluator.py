@@ -225,12 +225,13 @@ def evaluate(network: Network, query: Query) -> Result:
         allowed = {obj.mrid for obj in related}
         objects = [obj for obj in objects if obj.mrid in allowed]
 
-    # Checked against every candidate, not only the ones topology kept, so
-    # a utility's own column is known even where this slice lacks it.
-    select = _projection(query, type_key, distances, candidates)
+    # Taken from every candidate, not only the ones topology kept, so a
+    # utility's own column is known even where this slice lacks it.
+    known = _known_attributes(type_key, candidates)
+    select = _projection(query, type_key, known, distances)
 
     if query.where is not None:
-        context = _Context(network, attribute_universe(type_key), distances)
+        context = _Context(network, known, distances)
         objects = [obj for obj in objects if _test(query.where, obj, context)]
 
     if query.is_aggregate:
@@ -275,19 +276,26 @@ def _distances(network: Network, relation, related: list[GridObject]) -> dict[st
 # -- projection ---------------------------------------------------------
 
 
+def _known_attributes(type_key: str, candidates: list[GridObject]) -> frozenset[str]:
+    """Every attribute a query on this type may name, the utility's own included.
+
+    One set serves both questions -- is this name a typo, and is this bare
+    word on the right an attribute or a value -- so that a column the query
+    may filter on is also one it may compare against.
+    """
+    return attribute_universe(type_key) | frozenset(
+        key.lower() for obj in candidates for key in obj.extras
+    )
+
+
 def _projection(
     query: Query,
     type_key: str,
+    known: frozenset[str],
     distances: dict[str, int] | None = None,
-    objects: list[GridObject] | None = None,
 ) -> tuple[SelectItem, ...] | None:
     """The effective SELECT list, with GROUP BY's default filled in and checked."""
     select = query.select
-    # Whatever the matched equipment actually carries counts as known, so the
-    # utility's own columns are as selectable as they are filterable.
-    known = attribute_universe(type_key) | frozenset(
-        key.lower() for obj in objects or () for key in obj.extras
-    )
 
     referenced = (
         {item.attribute.lower() for item in select or ()}

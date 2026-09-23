@@ -154,7 +154,8 @@ Operators are `=`, `!=`, `>`, `>=`, `<`, `<=`, `IN (...)` and `CONTAINS`, combin
 A bare attribute is a truth test, so `WHERE energized` and `WHERE NOT energized` read naturally.
 
 **A bare word on the right-hand side is an attribute if the type has one by that name, and a value
-otherwise.** That is what makes the switching query work:
+otherwise** — and a utility's own columns count, so `WHERE kva > customer_count` compares the two.
+That is what makes the switching query work:
 
 ```
 FIND switches WHERE state != normal_state     -- switches out of normal position
