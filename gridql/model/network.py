@@ -12,6 +12,13 @@ ignores whether switches happen to be open. ``DOWNSTREAM OF "REC-001"`` answers
 "what is physically below this recloser", which is the question an engineer is
 asking when they plan work. Whether that equipment is currently *energized* is
 a separate question, answered by the derived ``energized`` attribute.
+
+Connectivity is recorded two ways, and a network may mix them. A plain
+connection joins two devices directly. A **connectivity node** is a point
+several devices' terminals meet -- the way GIS exports and CIM record it --
+and every device on a node is connected to every other one. The node is
+kept, not just the pairs it implies, because the pairs alone cannot tell a
+three-way branch point from a ring of three devices.
 """
 
 from __future__ import annotations
@@ -34,6 +41,10 @@ class Network:
         self.source = source
         self.objects: dict[str, GridObject] = {}
         self._adjacency: dict[str, set[str]] = {}
+        #: Connectivity node -> the devices attached to it, in attach order.
+        self._members: dict[str, list[str]] = {}
+        #: Device -> the nodes its terminals are attached to, in attach order.
+        self._terminals: dict[str, list[str]] = {}
         self._topology: _Topology | None = None
         # Bumped by every change the topology is derived from. The cache
         # records the revision it was built at and rebuilds when they differ.
@@ -73,6 +84,32 @@ class Network:
                 raise GridQLNameError(f"cannot connect unknown device '{mrid}'")
         self._adjacency[a_mrid].add(b_mrid)
         self._adjacency[b_mrid].add(a_mrid)
+        self.invalidate()
+
+    def attach(self, device: str | GridObject, node: str) -> None:
+        """Attach one of a device's terminals to a connectivity node.
+
+        Every device on a node is connected to every other one on it, so
+        attaching both ends of each device is all a node-based source needs.
+        Attaching a device to a node it is already on changes nothing.
+        """
+        mrid = device.mrid if isinstance(device, GridObject) else device
+        obj = self.objects.get(mrid)
+        if obj is None:
+            raise GridQLNameError(f"cannot attach unknown device '{mrid}'")
+        if not isinstance(obj, Device):
+            raise ValueError(f"'{mrid}' is a {obj.TYPE}, not equipment with terminals")
+        if not node:
+            raise ValueError(f"{mrid}: a connectivity node needs an identifier")
+
+        members = self._members.setdefault(node, [])
+        if mrid in members:
+            return
+        for other in members:
+            self._adjacency[mrid].add(other)
+            self._adjacency[other].add(mrid)
+        members.append(mrid)
+        self._terminals.setdefault(mrid, []).append(node)
         self.invalidate()
 
     def invalidate(self) -> None:
@@ -129,6 +166,37 @@ class Network:
 
     def neighbors(self, mrid: str) -> set[str]:
         return set(self._adjacency.get(mrid, ()))
+
+    @property
+    def nodes(self) -> dict[str, list[str]]:
+        """Every connectivity node, with the devices attached to it, by mRID."""
+        return {node: sorted(members) for node, members in self._members.items()}
+
+    def nodes_of(self, mrid: str) -> list[str]:
+        """The connectivity nodes a device is attached to, in attach order."""
+        return list(self._terminals.get(mrid, ()))
+
+    def at_node(self, node: str) -> list[str]:
+        """The devices attached to a connectivity node, by mRID."""
+        return sorted(self._members.get(node, ()))
+
+    def shares_node(self, a: str, b: str) -> bool:
+        """Whether two devices are on a common connectivity node."""
+        first, second = self._terminals.get(a, ()), self._terminals.get(b, ())
+        return any(node in second for node in first)
+
+    def links(self) -> list[tuple[str, str]]:
+        """The plain connections: adjacent devices that share no node.
+
+        Together with :attr:`nodes` this is the whole of the connectivity;
+        a pair on a common node is already implied by the node.
+        """
+        return sorted(
+            (mrid, neighbor)
+            for mrid, neighbors in self._adjacency.items()
+            for neighbor in neighbors
+            if mrid < neighbor and not self.shares_node(mrid, neighbor)
+        )
 
     # -- attributes -----------------------------------------------------
 
@@ -290,29 +358,68 @@ class _Topology:
     def _build_feeder(
         self, network: Network, head: str, members: set[str], loops: set[tuple[str, str]]
     ) -> None:
+        """Walk one feeder out from its head, breadth first.
+
+        Devices on a common connectivity node are all adjacent, so at a
+        three-way branch point the two outgoing devices are neighbours of
+        each other as well as of the one feeding them. Walked as plain
+        edges, that triangle would read as a loop. So a node is walked as a
+        node: whoever reaches it first is the parent of everything else on
+        it, and the node is then spent. Only reaching a device, or a node, a
+        second way closes a loop. Plain connections are walked as edges.
+        """
         self.parent[head] = None
         self.root[head] = head
         self.depth[head] = 0
         seen = {head}
+        #: The node each device was reached through; None for a plain edge.
+        via: dict[str, str | None] = {head: None}
+        #: Node -> the device that walked it.
+        walked: dict[str, str] = {}
         queue = deque([head])
+
+        def reach(device: str, parent: str, node: str | None) -> None:
+            seen.add(device)
+            via[device] = node
+            self.parent[device] = parent
+            self.root[device] = head
+            self.depth[device] = self.depth[parent] + 1
+            self.children.setdefault(parent, set()).add(device)
+            queue.append(device)
+
+        def loop(first: str, second: str) -> None:
+            loops.add((min(first, second), max(first, second)))
 
         while queue:
             current = queue.popleft()
+
+            for node in network.nodes_of(current):
+                if node == via[current]:
+                    continue
+                if node in walked:
+                    loop(current, walked[node])
+                    continue
+                walked[node] = current
+                for neighbor in sorted(network.at_node(node)):
+                    if neighbor == current or neighbor not in members:
+                        continue
+                    if neighbor in seen:
+                        loop(current, neighbor)
+                    else:
+                        reach(neighbor, current, node)
+
             for neighbor in sorted(network.neighbors(current)):
                 if neighbor == current:
                     continue  # a self-connection; validation reports it on its own
                 if neighbor not in members:
                     continue  # another feeder's equipment, across a tie
+                if network.shares_node(current, neighbor):
+                    continue  # walked with the node they share
                 if neighbor in seen:
                     if self.parent.get(current) != neighbor:
-                        loops.add((min(current, neighbor), max(current, neighbor)))
+                        loop(current, neighbor)
                     continue
-                seen.add(neighbor)
-                self.parent[neighbor] = current
-                self.root[neighbor] = head
-                self.depth[neighbor] = self.depth[current] + 1
-                self.children.setdefault(current, set()).add(neighbor)
-                queue.append(neighbor)
+                reach(neighbor, current, None)
 
     def _energize(self, network: Network) -> None:
         """Flood from every feeder head over the real graph, stopping at open switches.

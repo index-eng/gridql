@@ -13,6 +13,11 @@ table of what connects to what -- without asking them to produce CIM first.
       feeders.csv       mrid, name, voltage, head       (optional)
       substations.csv   mrid, name, voltage             (optional)
 
+Connectivity comes one of two ways, or both. ``connections.csv`` pairs
+devices directly. Most GIS and ADMS exports instead give each device the
+nodes at its two ends -- ``from_node`` and ``to_node`` columns in
+``devices.csv`` -- and devices are connected wherever their nodes match.
+
 Only ``devices.csv`` is required; feeders and substations are created from
 whatever the devices refer to, and a feeder with exactly one breaker gets
 that breaker as its head.
@@ -72,10 +77,20 @@ ALIASES: dict[str, str] = {
     "ampacity": "ampacity", "rated_current": "ampacity", "amps": "ampacity",
     "head": "head", "head_device": "head", "source": "head", "source_device": "head",
     "from_device": "from_device", "from": "from_device", "from_mrid": "from_device",
-    "device1": "from_device", "node1": "from_device",
+    "device1": "from_device",
     "to_device": "to_device", "to": "to_device", "to_mrid": "to_device",
-    "device2": "to_device", "node2": "to_device",
+    "device2": "to_device",
+    "from_node": "from_node", "fromnode": "from_node", "from_node_id": "from_node",
+    "fromnodeid": "from_node", "node1": "from_node", "from_bus": "from_node",
+    "frombus": "from_node", "bus1": "from_node", "upstream_node": "from_node",
+    "node": "from_node", "bus": "from_node",
+    "to_node": "to_node", "tonode": "to_node", "to_node_id": "to_node",
+    "tonodeid": "to_node", "node2": "to_node", "to_bus": "to_node",
+    "tobus": "to_node", "bus2": "to_node", "downstream_node": "to_node",
 }
+
+#: The device columns that name connectivity nodes, in terminal order.
+NODE_COLUMNS = ("from_node", "to_node")
 
 _BOOL_TRUE = frozenset({"true", "t", "yes", "y", "1"})
 _BOOL_FALSE = frozenset({"false", "f", "no", "n", "0"})
@@ -95,6 +110,7 @@ class CsvReport:
     feeders: int = 0
     substations: int = 0
     connections: int = 0
+    nodes: int = 0
     problems: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -102,9 +118,10 @@ class CsvReport:
         self.problems.append(f"{source}:{line}: {message}")
 
     def counts(self) -> str:
+        through = f" through {self.nodes} nodes" if self.nodes else ""
         return (
             f"{self.devices} devices, {self.feeders} feeders, "
-            f"{self.substations} substations, {self.connections} connections"
+            f"{self.substations} substations, {self.connections} connections{through}"
         )
 
     def summary(self) -> str:
@@ -184,7 +201,8 @@ def read_csv(
     _ensure_containers(network, devices)
 
     for row in devices:
-        _add_device(network, row, report)
+        if _add_device(network, row, report):
+            _attach(network, row, report)
 
     for row in tables["connections"]:
         _add_connection(network, row, report)
@@ -201,6 +219,7 @@ def read_csv(
     report.feeders = len(network.feeders)
     report.substations = len(network.substations)
     report.connections = sum(len(network.neighbors(m)) for m in network.objects) // 2
+    report.nodes = len(network.nodes)
     return CsvDocument(network, report)
 
 
@@ -382,21 +401,23 @@ def _ensure_containers(network: Network, devices: list) -> None:
             network.add_feeder(feeder, substation=substation)
 
 
-def _add_device(network, source_row: _Row, report) -> None:
+def _add_device(network, source_row: _Row, report) -> bool:
+    """Add the row's device, returning whether it was added."""
     row, line, source = source_row.values, source_row.line, source_row.source
     mrid = row.get("mrid")
     if not mrid:
         report.problem(source, line, "no mRID")
-        return
+        return False
     if mrid in network.objects:
         report.problem(source, line, f"duplicate mRID '{mrid}'")
-        return
+        return False
 
     cls, note = _device_class(row.get("type"))
     if note:
         report.problem(source, line, note)
 
-    handled = {"mrid", "name", "type", "feeder", "substation", "phases", "voltage"}
+    handled = {"mrid", "name", "type", "feeder", "substation", "phases", "voltage",
+               *NODE_COLUMNS}
     fields: dict[str, Any] = {
         "name": row.get("name", ""),
         "feeder": row.get("feeder"),
@@ -436,6 +457,26 @@ def _add_device(network, source_row: _Row, report) -> None:
         network.add(cls(mrid=mrid, **fields))
     except (TypeError, ValueError) as error:
         report.problem(source, line, f"{mrid}: {error}")
+        return False
+    return True
+
+
+def _attach(network, source_row: _Row, report) -> None:
+    """Attach a device to the nodes its row names.
+
+    Devices are connected wherever their nodes match, so the order the rows
+    come in does not matter.
+    """
+    row, line, source = source_row.values, source_row.line, source_row.source
+    nodes = [row[column] for column in NODE_COLUMNS if row.get(column)]
+    if len(nodes) == 2 and nodes[0] == nodes[1]:
+        report.problem(
+            source, line,
+            f"{row['mrid']}: both ends are on node '{nodes[0]}', so it connects nothing "
+            "to anything; attached once",
+        )
+    for node in nodes:
+        network.attach(row["mrid"], node)
 
 
 def _add_connection(network, source_row: _Row, report) -> None:
@@ -569,15 +610,20 @@ def write_csv(network: Network, directory: str | Path) -> list[Path]:
             network.feeders,
             extra={"head": lambda f: f.head},
         ),
-        _write(base / DEVICES, _device_columns(network), network.devices),
+        _write(
+            base / DEVICES, _device_columns(network), network.devices,
+            extra=_node_cells(network),
+        ),
     ]
 
+    # A pair on a node both devices have in their node columns needs no row.
+    columns = len(NODE_COLUMNS)
+    in_columns = {mrid: set(network.nodes_of(mrid)[:columns]) for mrid in network.objects}
     edges = sorted(
-        {
-            (min(mrid, neighbor), max(mrid, neighbor))
-            for mrid in network.objects
-            for neighbor in network.neighbors(mrid)
-        }
+        (mrid, neighbor)
+        for mrid in network.objects
+        for neighbor in network.neighbors(mrid)
+        if mrid < neighbor and not in_columns[mrid] & in_columns[neighbor]
     )
     path = base / CONNECTIONS
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -594,7 +640,25 @@ def _device_columns(network: Network) -> tuple[str, ...]:
     optional = ["state", "normal_state", "is_tie", "kva", "primary_voltage",
                 "secondary_voltage", "kw", "kvar", "length", "conductor", "ampacity"]
     present = [name for name in optional if any(_has(d, name) for d in network.devices)]
-    return _with_extras(base + present, network.devices)
+    nodes = list(NODE_COLUMNS) if network.nodes else []
+    return _with_extras(base + present + nodes, network.devices)
+
+
+def _node_cells(network: Network) -> dict:
+    """Writers for the node columns: a device's first and second node.
+
+    A device on more than two nodes -- a three-winding transformer read from
+    CIM -- keeps its first two here, and its connections through the rest
+    are written to connections.csv as pairs.
+    """
+    return {
+        column: (lambda device, index=index: _nth(network.nodes_of(device.mrid), index))
+        for index, column in enumerate(NODE_COLUMNS)
+    }
+
+
+def _nth(values: list[str], index: int) -> str | None:
+    return values[index] if index < len(values) else None
 
 
 def _with_extras(columns: list[str], objects: Iterable[GridObject]) -> tuple[str, ...]:

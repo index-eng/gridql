@@ -86,6 +86,18 @@ CREATE TABLE IF NOT EXISTS connections (
     CHECK (from_device < to_device)
 );
 
+-- Connectivity nodes, where the source recorded them: each terminal of a
+-- device, in order, and the node it is attached to. Every pair of devices on
+-- a node is also in `connections`, so a reader that ignores this table still
+-- sees the same adjacency; this one is what tells a branch point from a loop.
+CREATE TABLE IF NOT EXISTS terminals (
+    device   TEXT NOT NULL REFERENCES devices(mrid) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    node     TEXT NOT NULL,
+    PRIMARY KEY (device, sequence)
+);
+
 CREATE INDEX IF NOT EXISTS devices_by_feeder ON devices(feeder);
 CREATE INDEX IF NOT EXISTS devices_by_type ON devices(device_type);
 CREATE INDEX IF NOT EXISTS connections_by_to ON connections(to_device);
+CREATE INDEX IF NOT EXISTS terminals_by_node ON terminals(node);

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from gridql import Network, build_sample_network, execute, render
+from gridql import Network, build_sample_network, execute, render, validate
 from gridql.cim import export_network, export_summary, read_cim
 from gridql.cim.importer import CimImportError, loads_cim
 from gridql.cim.vocabulary import CIM_NS, GRIDQL_NS, RDF_NS
@@ -356,10 +356,14 @@ class ForeignDocumentTests(unittest.TestCase):
         self.assertEqual(sorted(self.network.neighbors("BKR1")), ["DISC1", "LBS1"])
         self.assertEqual(sorted(self.network.neighbors("DISC1")), ["BKR1", "LBS1"])
 
-    def test_the_bus_expansion_is_reported(self):
-        self.assertTrue(
-            any("more than two terminals" in note for note in self.document.report.notes)
-        )
+    def test_a_bus_is_kept_as_one_node(self):
+        self.assertEqual(sorted(self.network.at_node("CN1")), ["BKR1", "DISC1", "LBS1"])
+        self.assertEqual(self.network.nodes_of("LBS1"), ["CN1", "CN2"])
+
+    def test_a_bus_is_not_a_loop(self):
+        # Three devices on one bus are all adjacent; as plain edges that
+        # triangle used to read as a loop.
+        self.assertNotIn("loop", {finding.code for finding in validate(self.network)})
 
     def test_a_missing_head_is_inferred_from_the_only_breaker(self):
         self.assertEqual(self.network.feeders[0].head, "BKR1")

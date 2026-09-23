@@ -66,6 +66,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "state", "normal_state", "is_tie",
         "kva", "primary_voltage", "secondary_voltage",
         "kw", "kvar", "length", "conductor", "ampacity",
+        "from_node", "to_node",
     ),
     "connections": ("from_device", "to_device"),
 }

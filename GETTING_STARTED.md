@@ -372,7 +372,9 @@ gridql import-csv ./gis-export --db grid.sqlite
 ```
 
 A `devices.csv` is all that is strictly required; `connections.csv`, `feeders.csv` and
-`substations.csv` are optional. Column names are matched loosely (`OBJECTID`, `Device Type`,
+`substations.csv` are optional. Connectivity can be a `connections.csv` of device pairs, or
+`from_node` and `to_node` columns in `devices.csv` naming the nodes at each device's ends. Column
+names are matched loosely (`OBJECTID`, `Device Type`,
 `Circuit`, `kV` all work), cells may carry units (`12470 V`, `0.5MVA`), and any column GridQL does
 not recognise is kept as a queryable attribute rather than dropped. Bad rows are reported with
 their line number instead of stopping the load. A query still runs when that happens, but warns
@@ -514,9 +516,9 @@ Once it works, name it in `project.gridqlconfig` with `mapping = "gis-export.tom
 your utility's export format rather than one folder of it, so every CSV read in the project uses it
 — next month's export included — unless `--mapping` names a different one.
 
-One limit for now: connections have to be listed device to device. An export that records
-connectivity as `FROM_NODE` and `TO_NODE` on each device, with devices joined where their node IDs
-match, cannot be read yet.
+Connectivity can be listed device to device in a `connections` section, or — as most GIS exports
+record it — as the nodes at each device's ends, with devices joined where their node IDs match.
+Map those in the device section: `from_node = "FROM_NODE"` and `to_node = "TO_NODE"`.
 
 ### Persistence: SQLite
 
@@ -616,8 +618,8 @@ save_network(network, "grid.sqlite")
 
 ## Not built yet
 
-An editor, GeoJSON output and device geometry, a JSON model format, reading connectivity recorded
-as nodes rather than device pairs, and reading straight from a database such as Postgres.
+An editor, GeoJSON output and device geometry, a JSON model format, and reading straight from a
+database such as Postgres.
 
 The `EXPORT CIM` statement from the design notes is not its own syntax — a `PARAM`, `FED BY` and
 `RETURN cim` do the same job with clauses that already exist, as

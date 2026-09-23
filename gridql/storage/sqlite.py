@@ -166,7 +166,7 @@ def _unstorable(network: Network) -> list[str]:
 
 
 def _clear(connection: sqlite3.Connection) -> None:
-    for table in ("connections", "switches", "transformers", "lines", "loads",
+    for table in ("terminals", "connections", "switches", "transformers", "lines", "loads",
                   "capacitors", "devices", "feeders", "substations"):
         connection.execute(f"DELETE FROM {table}")
 
@@ -222,6 +222,14 @@ def _write_connections(connection: sqlite3.Connection, network: Network) -> None
     connection.executemany(
         "INSERT INTO connections(from_device, to_device) VALUES (?, ?)", sorted(edges)
     )
+    connection.executemany(
+        "INSERT INTO terminals(device, sequence, node) VALUES (?, ?, ?)",
+        [
+            (device.mrid, sequence, node)
+            for device in network.devices
+            for sequence, node in enumerate(network.nodes_of(device.mrid), start=1)
+        ],
+    )
 
 
 def _to_sql(value: Any) -> Any:
@@ -267,6 +275,14 @@ def load_network(source: str | Path | sqlite3.Connection) -> Network:
         for row in connection.execute("SELECT * FROM connections"):
             network.connect(row["from_device"], row["to_device"])
 
+        # A database written before nodes were stored has no terminals
+        # table; its connections are the whole of its connectivity.
+        if _has_table(connection, "terminals"):
+            for row in connection.execute(
+                "SELECT device, node FROM terminals ORDER BY device, sequence"
+            ):
+                network.attach(row["device"], row["node"])
+
         for feeder in network.feeders:
             feeder.head = heads.get(feeder.mrid)
 
@@ -276,6 +292,12 @@ def load_network(source: str | Path | sqlite3.Connection) -> Network:
     finally:
         if owned:
             connection.close()
+
+
+def _has_table(connection: sqlite3.Connection, name: str) -> bool:
+    return connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone() is not None
 
 
 def _check_version(connection: sqlite3.Connection) -> None:

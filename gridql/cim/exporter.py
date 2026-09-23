@@ -10,7 +10,9 @@ back without hand-building the structure.
 Two things are synthesised on the way out, because CIM models connectivity
 indirectly:
 
-* every edge becomes a ``ConnectivityNode`` joining two ``Terminal`` objects;
+* every connectivity node becomes a ``ConnectivityNode``, with a
+  ``Terminal`` for each device on it, and every plain connection between two
+  devices becomes a node of its own joining their two terminals;
 * every distinct voltage becomes a ``BaseVoltage`` the equipment refers to.
 
 Identifiers are derived from mRIDs rather than freshly minted UUIDs, so
@@ -113,12 +115,13 @@ def export_network(
         if isinstance(device, Transformer):
             _write_transformer_ends(root, selection, device)
 
-    for node, _first, _second in selection.connectivity_nodes():
-        _identified(root, "ConnectivityNode", node)
+    nodes = selection.connectivity_nodes()
+    for node, mrid, _terminals in nodes:
+        _identified(root, "ConnectivityNode", node, mrid=mrid)
 
-    for node, first, second in selection.connectivity_nodes():
-        for device_mrid, other in ((first, second), (second, first)):
-            terminal = _identified(root, "Terminal", _terminal_id(device_mrid, other))
+    for node, _mrid, terminals in nodes:
+        for device_mrid, terminal_id in terminals:
+            terminal = _identified(root, "Terminal", terminal_id)
             _ref(terminal, CIM_NS, "Terminal.ConductingEquipment", device_mrid)
             _ref(terminal, CIM_NS, "Terminal.ConnectivityNode", node)
 
@@ -170,16 +173,32 @@ class _Selection:
     def base_voltage_id(self, kilovolts: float | None) -> str | None:
         return None if kilovolts is None else self._voltages.get(kilovolts)
 
-    def connectivity_nodes(self) -> list[tuple[str, str, str]]:
-        """One node per edge that lies wholly inside the selection."""
+    def connectivity_nodes(self) -> list[tuple[str, str, list[tuple[str, str]]]]:
+        """Each node to write: its rdf:ID, its mRID, and (device, terminal ID) pairs.
+
+        A recorded node is written with the devices on it that are in the
+        selection, even if that is only one: its terminal still says where
+        the device attaches. A plain connection is written as a node of its
+        own when both of its ends are in the selection.
+        """
         included = {device.mrid for device in self.devices}
-        edges = {
-            (min(mrid, neighbor), max(mrid, neighbor))
-            for mrid in included
-            for neighbor in self.network.neighbors(mrid)
-            if neighbor in included
-        }
-        return [(_node_id(a, b), a, b) for a, b in sorted(edges)]
+        found: list[tuple[str, str, list[tuple[str, str]]]] = []
+
+        for node, members in sorted(self.network.nodes.items()):
+            chosen = sorted(m for m in members if m in included)
+            if chosen:
+                identifier = _recorded_node_id(node)
+                found.append(
+                    (identifier, node, [(m, _terminal_id(m, identifier)) for m in chosen])
+                )
+
+        for a, b in self.network.links():
+            if a in included and b in included:
+                identifier = _node_id(a, b)
+                found.append(
+                    (identifier, identifier, [(a, _terminal_id(a, b)), (b, _terminal_id(b, a))])
+                )
+        return found
 
 
 def _header(selection: _Selection) -> str:
@@ -316,6 +335,15 @@ def _base_voltage_id(kilovolts: float) -> str:
 
 def _node_id(first: str, second: str) -> str:
     return f"CN_{_pair(first, second)}"
+
+
+def _recorded_node_id(node: str) -> str:
+    """Prefixed, because node identifiers are often bare numbers that a
+    utility also uses for equipment. A node read from a CIM document already
+    has the prefix, and exporting it again should not grow another.
+    """
+    identifier = xml_id(node)
+    return identifier if identifier.startswith("CN_") else f"CN_{identifier}"
 
 
 def _terminal_id(device: str, other: str) -> str:

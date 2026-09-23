@@ -524,6 +524,36 @@ Feeders and substations are created from whatever the devices refer to, and a fe
 exactly one breaker gets it as the head — with anything less clear reported rather than guessed,
 the same rule CIM import uses.
 
+### Connectivity nodes
+
+Most GIS and ADMS exports do not list which device connects to which. Instead each device names
+the nodes at its two ends, and devices are connected wherever those nodes match:
+
+```
+mrid,type,feeder,from_node,to_node
+BRK,breaker,F1,N0,N1
+L1,line,F1,N1,N2
+L2,line,F1,N2,N3        <- L1, L2 and L3 meet at N2: a branch point
+L3,line,F1,N2,N4
+LD1,load,F1,N3,         <- a load has one end
+```
+
+`from_node` and `to_node` go in `devices.csv`, and the usual spellings are recognised —
+`FROM_NODE`, `FromNodeId`, `Bus1`/`Bus2`, `node1`/`node2`, or a single `node` column for
+one-ended equipment. Rows can come in any order. `connections.csv` is still read if it is there,
+so the two styles can be mixed.
+
+**The nodes are kept, not just the connections they imply.** Every device on a node is connected
+to every other, so `CONNECTED TO "L2"` includes `L3`. But the connections alone cannot tell a
+branch point from three devices wired in a ring — the neighbours are the same. The feeder walk
+uses the nodes: whichever device reaches a node first feeds everything else on it, so `L2` and
+`L3` both hang off `L1`, and only reaching a device or a node a second way counts as a loop.
+Parallel cables between the same two nodes are still reported as the loop they are.
+
+`import-csv` reports how many nodes it read (`loaded 5 devices, ... 5 connections through 5
+nodes`), and SQLite, `export-csv` and CIM export all keep the nodes. A mapping names the columns like any other field:
+`from_node = "N-{FROM_NODE}"`.
+
 ### Mapping a utility's own schema
 
 Guessing from headers only goes so far. One utility calls a circuit `FEEDER_ID`, the next
@@ -566,7 +596,8 @@ gridql --csv ./gis-export --mapping gis-export.toml 'FIND reclosers'
 A field is a column, a `{COLUMN}` template, or a table naming a `column`, `template` or `value`,
 with an optional `unit` the cells are written in, a `values` table translating the utility's
 codes and a `default` for empty cells. Sections are `substations`, `feeders`, `devices` (as many
-as there are files) and `connections`; file names are relative to the `--csv` directory.
+as there are files) and `connections`; file names are relative to the `--csv` directory. A device
+section can map `from_node` and `to_node` instead of, or as well as, a `connections` section.
 
 **With a mapping nothing is guessed.** A column the mapping does not name is kept as an attribute
 — `INSTALL_YEAR` becomes `install_year` — but never read as a field, so a utility's `STATUS`
@@ -682,11 +713,10 @@ SI units — line length in metres, transformer ratings in VA on `PowerTransform
 load in W and VAr, voltages as `BaseVoltage` in volts.
 
 **Connectivity.** CIM never joins equipment directly: a device has `Terminal`s, and terminals meet
-at a `ConnectivityNode`. The model stores plain edges, so export synthesises one node per edge with
-two terminals, and import collapses them back. Importing a real bus — a node with more than two
-terminals — produces edges between every pair of devices on it, which keeps both `CONNECTED TO`
-and feeder traversal correct even though the node object itself is not preserved. The import report
-says when this happened.
+at a `ConnectivityNode`. Import keeps each node, so a bus with five devices on it stays one junction
+(see [Connectivity nodes](#connectivity-nodes)). Export writes each node the model holds as one
+`ConnectivityNode` with a terminal per device, and gives each plain device-to-device connection a
+node of its own.
 
 **Identifiers** are derived from mRIDs rather than freshly minted UUIDs, so exporting the same
 network twice gives byte-identical output and a diff means the network really changed. An mRID that
@@ -761,9 +791,8 @@ Labs, LLC.
 
 ## Not built yet
 
-GeoJSON output and device geometry, a JSON model format, connectivity recorded as nodes
-(`FROM_NODE`/`TO_NODE` on each device) rather than device pairs, reading straight from a database
-such as Postgres, and the editor.
+GeoJSON output and device geometry, a JSON model format, reading straight from a database such as
+Postgres, and the editor.
 
 The `EXPORT CIM FROM feeder "FDR-104" INCLUDING ...` statement from the design is not implemented
 as its own syntax. [`queries/export_feeder.gridql`](queries/export_feeder.gridql) does the same

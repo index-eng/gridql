@@ -3,20 +3,17 @@
 
 """Read CIM RDF/XML into the semantic model.
 
-Import is the mirror of export, with one asymmetry worth knowing about.
-CIM joins equipment through ConnectivityNodes, and a node may gather any
-number of terminals -- a bus. The model stores plain edges, so a node with
-*n* terminals becomes edges between every pair of its devices. For the
-two-terminal nodes this package writes that is exactly lossless; for a real
-bus it keeps the right answer for "what is connected here" and for feeder
-traversal, while not pretending to preserve the node object itself.
+Import is the mirror of export. CIM joins equipment through
+ConnectivityNodes, and a node may gather any number of terminals -- a bus.
+Each one is kept as a connectivity node in the model, identified by its
+mRID, so a bus reads as one junction rather than as a ring of the devices
+on it.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
@@ -394,36 +391,24 @@ def _type_fields(cls: type, record: _Record, ends: dict) -> dict[str, Any]:
 
 
 def _connect(network: Network, grouped: dict[str, list[_Record]], resolve, report) -> int:
-    """Turn Terminals and ConnectivityNodes back into edges."""
-    at_node: dict[str, list[str]] = {}
+    """Attach each piece of equipment to the ConnectivityNodes its Terminals name."""
+    terminals: list[tuple[str, str, str]] = []
     for record in grouped.get("Terminal", []):
         equipment = resolve(record.reference(CIM_NS, "Terminal.ConductingEquipment"))
-        node = record.reference(CIM_NS, "Terminal.ConnectivityNode")
+        node = resolve(record.reference(CIM_NS, "Terminal.ConnectivityNode"))
         if equipment is None or node is None:
             continue
         if not isinstance(network.objects.get(equipment), Device):
             continue  # unknown, or a container: only equipment has terminals
-        members = at_node.setdefault(node, [])
-        if equipment not in members:
-            members.append(equipment)
+        sequence = record.value(CIM_NS, "ACDCTerminal.sequenceNumber") or ""
+        terminals.append((equipment, sequence.zfill(9), node))
 
-    edges: set[tuple[str, str]] = set()
-    buses = 0
-    for members in at_node.values():
-        if len(members) > 2:
-            buses += 1
-        for first, second in combinations(sorted(members), 2):
-            edges.add((first, second))
+    # In terminal order where the document numbers them, so a device's
+    # first node is its first terminal's; otherwise in document order.
+    for equipment, _sequence, node in sorted(terminals, key=lambda t: (t[0], t[1])):
+        network.attach(equipment, node)
 
-    for first, second in sorted(edges):
-        network.connect(first, second)
-
-    if buses:
-        report.notes.append(
-            f"{buses} connectivity node(s) joined more than two terminals; "
-            "each was expanded into edges between every pair of its devices"
-        )
-    return len(edges)
+    return sum(len(network.neighbors(m)) for m in network.objects) // 2
 
 
 def _assign_heads(network: Network, heads: dict[str, str | None], report: ImportReport) -> None:
