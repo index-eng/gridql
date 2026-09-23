@@ -100,13 +100,20 @@ followed it would have one feeder swallow the next. A device belongs to exactly 
 puts it in exactly one `EquipmentContainer`), so `DOWNSTREAM OF` and `UPSTREAM OF` stay inside that
 feeder and stop at the tie. Adjacency itself is still physical: `CONNECTED TO` reaches across it.
 
-**Traversal ignores switch state**, so `DOWNSTREAM OF "REC-1201-01"` answers "what is physically below
+**Traversal ignores where switches are right now**, so `DOWNSTREAM OF "REC-1201-01"` answers "what is physically below
 this recloser", which is the question being asked when planning work. Whether something is
 currently *energised* is a separate question, answered by the derived `energized` attribute:
 
 ```
 FIND devices DOWNSTREAM OF "REC-1201-01" WHERE NOT energized
 ```
+
+**A loop inside one feeder breaks at its normally open switch.** Some circuits are meshed within a
+single feeder and run radially by leaving a switch normally open; the IEEE 123-bus feeder has two
+loops closed that way. Nothing is fed *through* a normally open switch while another path reaches
+the equipment beyond it, so upstream and downstream follow the circuit's normal configuration, and
+validation does not report the designed open point as a loop. Equipment reachable only through such a
+switch is still below it. This uses each switch's *normal* position, so operating one moves nothing.
 
 Energisation is computed the other way round: it floods from *every* feeder head across the real
 graph, blocked by open switches, ignoring feeder boundaries. That is what makes closing a tie

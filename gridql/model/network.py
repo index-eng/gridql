@@ -367,6 +367,14 @@ class _Topology:
         node: whoever reaches it first is the parent of everything else on
         it, and the node is then spent. Only reaching a device, or a node, a
         second way closes a loop. Plain connections are walked as edges.
+
+        A normally open switch is walked through last. A loop inside one
+        feeder is closed by such a switch -- that is what makes the feeder
+        radial in its normal configuration -- so the tree must break the
+        loop there rather than wherever the walk happens to meet itself.
+        Equipment reachable only through one is still below it; it is just
+        reached after everything the normal paths reach. The switch's
+        present position plays no part, so operating one moves nothing.
         """
         self.parent[head] = None
         self.root[head] = head
@@ -387,11 +395,28 @@ class _Topology:
             self.children.setdefault(parent, set()).add(device)
             queue.append(device)
 
+        def normally_open(mrid: str) -> bool:
+            obj = network.objects.get(mrid)
+            return isinstance(obj, Switch) and obj.normal_state == "OPEN"
+
         def loop(first: str, second: str) -> None:
+            if normally_open(first) or normally_open(second):
+                return  # the feeder's own open point, not a fault in it
             loops.add((min(first, second), max(first, second)))
 
-        while queue:
-            current = queue.popleft()
+        #: Normally open switches reached but not yet walked through.
+        held: deque[str] = deque()
+        released: set[str] = set()
+
+        while queue or held:
+            if not queue:
+                current = held.popleft()
+                released.add(current)
+            else:
+                current = queue.popleft()
+                if current != head and normally_open(current) and current not in released:
+                    held.append(current)
+                    continue
 
             for node in network.nodes_of(current):
                 if node == via[current]:

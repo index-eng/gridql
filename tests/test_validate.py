@@ -186,6 +186,14 @@ class WarningTests(unittest.TestCase):
         self.assertIn("loop", codes(report))
         self.assertTrue(report.ok, "a loop is a warning, not an error")
 
+    def test_a_loop_through_a_normally_open_switch_is_the_feeders_open_point(self):
+        # A tie inside one feeder is how a meshed circuit is run radially:
+        # the tree breaks the loop at the switch, and that is not a fault.
+        network = build_sample_network()
+        network.connect("TIE-001", "REC-001")
+        self.assertNotIn("loop", codes(validate(network)))
+        self.assertNotIn("TIE-001", network.topology().children)  # nothing is fed through it
+
     def test_a_headless_feeder(self):
         feeder = self.feeder()
         feeder.add_breaker("B")
@@ -274,7 +282,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_warnings_alone_exit_zero(self):
         network = build_sample_network()
-        network.connect("TIE-001", "REC-001")  # closes a loop
+        network.connect("LN-002", "REC-001")  # closes a loop
         path = self.save(network, "warn.sqlite")
         code, out, _ = self.run_cli(["validate", "--db", path])
         self.assertEqual(code, 0)
@@ -282,7 +290,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_strict_fails_on_warnings(self):
         network = build_sample_network()
-        network.connect("TIE-001", "REC-001")
+        network.connect("LN-002", "REC-001")
         path = self.save(network, "warn.sqlite")
         self.assertEqual(self.run_cli(["validate", "--db", path, "--strict"])[0], 1)
 
