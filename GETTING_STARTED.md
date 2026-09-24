@@ -173,6 +173,7 @@ because that is what an engineer means by it, and what CIM says.
 | `UPSTREAM OF "X"` | what lies between X and the feeder head |
 | `CONNECTED TO "X"` | what touches X directly |
 | `FED BY "X"` | everything X supplies |
+| `PROTECTED BY "X"` | what X is the nearest protection for: below it, down to the next fuse, recloser or sectionalizer |
 
 ### Physical versus energized — the distinction that matters
 
@@ -222,6 +223,20 @@ attributes you can select, filter, sort and total:
 FIND devices DOWNSTREAM OF "REC-1201-01" SELECT mRID, type, hops
 FIND devices DOWNSTREAM OF "REC-1201-01" WHERE hops <= 1
 ```
+
+### Protection zones
+
+A fault takes out the zone of the nearest protective device above it — breaker, recloser, fuse or
+sectionalizer — and `PROTECTED BY` asks for that zone directly. Every device also carries
+`protected_by`, the device whose zone it is in:
+
+```bash
+gridql 'FIND loads PROTECTED BY "FU-1201-02"'                  # who goes out if this fuse blows
+gridql 'FIND devices WHERE mrid = "TX-40331" SELECT protected_by'   # FU-1201-04
+gridql 'FIND loads SELECT protected_by, COUNT(*), SUM(kw) GROUP BY protected_by'
+```
+
+The last one is the exposure of every protective device on the system in one table.
 
 ### Filters that read like the question
 

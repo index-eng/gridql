@@ -94,6 +94,7 @@ containers.
 | `UPSTREAM OF "X"` | everything between X and the feeder head, X excluded |
 | `CONNECTED TO "X"` | immediate neighbours of X |
 | `FED BY "X"` | everything X supplies, X included; for a feeder or substation, all of its devices |
+| `PROTECTED BY "X"` | X's protection zone: everything below it down to, and including, the next protective devices |
 
 Two rules govern traversal, and they are deliberately different.
 
@@ -141,6 +142,57 @@ That makes the fault-isolation question a query:
 FIND switches UPSTREAM OF "TX-40331" LIMIT 1      -- the nearest device to isolate a fault here
 FIND reclosers UPSTREAM OF "TX-40331" LIMIT 1     -- and the recloser behind it
 ```
+
+### Protection zones
+
+Breakers, reclosers, fuses and sectionalizers are **protective devices**: each one opens on its own
+to isolate a fault below it, so a fault takes out only the zone of the nearest one above it.
+`PROTECTED BY "X"` is that zone — everything below X down to the next protective devices, which
+are included because a fault on one of them is still X's to clear. Everything past them is in
+their own zones. A plain switch bounds nothing, because it waits for someone to operate it.
+
+```
+FIND devices PROTECTED BY "SEC-1201-01" SELECT mRID, type, hops
+```
+
+```
+mRID        type         hops
+----------  -----------  ----
+OH-1201-21  line         1
+FU-1201-03  fuse         2
+FU-1201-04  fuse         2
+OH-1201-26  line         2
+TX-40340    transformer  3
+SP-40340    load         4
+
+6 rows
+```
+
+A sectionalizer clears nothing itself. It counts the trips of the recloser behind it and opens
+while the line is dead, so a permanent fault below it takes out only what is below it — which is
+the boundary a zone describes, so it counts as protective. A feeder's zone is its head breaker's.
+Naming a device that bounds no zone is an error that says so, rather than an empty answer.
+
+Every device also has a `protected_by` attribute: the nearest protective device above it, and
+exactly the X whose zone it is in. That turns "how many customers does each fuse take out?" into a
+`GROUP BY`:
+
+```
+FIND loads SELECT protected_by, COUNT(*), SUM(kw) GROUP BY protected_by ORDER BY SUM(kw) DESC
+```
+
+```
+protected_by  COUNT(*)  SUM(kw)
+------------  --------  -------
+FU-1201-02    2         545
+FU-1201-06    1         210
+FU-1202-02    1         88
+...
+```
+
+Zones follow the circuit's normal configuration, like `UPSTREAM OF` and `DOWNSTREAM OF`: a blown
+fuse is still the boundary of its zone, and equipment above every protective device, such as the
+feeder head, has no `protected_by`.
 
 ### Distance: hops and depth
 

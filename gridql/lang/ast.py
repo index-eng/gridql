@@ -197,6 +197,7 @@ RELATION_METHODS = {
     "UPSTREAM OF": "upstream_of",
     "CONNECTED TO": "connected_to",
     "FED BY": "fed_by",
+    "PROTECTED BY": "protected_by",
 }
 
 

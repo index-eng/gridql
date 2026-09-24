@@ -1,0 +1,18 @@
+-- What each protective device on a feeder takes out when it operates.
+-- A fault clears at the nearest breaker, recloser, fuse or sectionalizer
+-- above it, so each load belongs to exactly one of these rows.
+
+PARAM feeder
+
+FIND loads
+FED BY $feeder
+SELECT protected_by, COUNT(*), SUM(kw)
+GROUP BY protected_by
+ORDER BY SUM(kw) DESC
+RETURN table;
+
+-- The zone of the feeder's head breaker: what only it protects.
+FIND devices
+PROTECTED BY $feeder
+SELECT mRID, type, hops
+RETURN table

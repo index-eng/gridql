@@ -48,6 +48,7 @@ KEYWORDS = frozenset(
         "UPSTREAM",
         "CONNECTED",
         "FED",
+        "PROTECTED",
         "OF",
         "TO",
         "BY",

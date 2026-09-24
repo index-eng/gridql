@@ -42,7 +42,7 @@ MISSING = _Missing()
 
 #: Attributes every grid object answers to, regardless of its dataclass fields.
 DERIVED_ATTRS = frozenset(
-    {"mrid", "id", "name", "type", "cim_class", "energized", "depth", "hops"}
+    {"mrid", "id", "name", "type", "cim_class", "energized", "depth", "hops", "protected_by"}
 )
 
 
@@ -140,6 +140,9 @@ class Device(GridObject):
     TYPE = "device"
     CIM_CLASS = "ConductingEquipment"
     COLUMNS = ("mrid", "name", "type", "feeder", "phases", "voltage")
+    #: Whether the device bounds a protection zone: it opens by itself to
+    #: isolate a fault below it, so a fault there takes out only its zone.
+    PROTECTIVE = False
 
     mrid: str
     name: str = ""
@@ -185,24 +188,31 @@ class Switch(Observable, Device):
 class Recloser(Switch):
     TYPE = "recloser"
     CIM_CLASS = "ProtectedSwitch"
+    PROTECTIVE = True
 
 
 @dataclass(repr=False)
 class Breaker(Switch):
     TYPE = "breaker"
     CIM_CLASS = "Breaker"
+    PROTECTIVE = True
 
 
 @dataclass(repr=False)
 class Fuse(Switch):
     TYPE = "fuse"
     CIM_CLASS = "Fuse"
+    PROTECTIVE = True
 
 
 @dataclass(repr=False)
 class Sectionalizer(Switch):
     TYPE = "sectionalizer"
     CIM_CLASS = "Sectionaliser"
+    # It clears nothing itself, but it counts the recloser behind it and
+    # opens in the dead time, so a permanent fault below it takes out only
+    # what is below it. That outage boundary is what a zone is for.
+    PROTECTIVE = True
 
 
 @dataclass(repr=False)

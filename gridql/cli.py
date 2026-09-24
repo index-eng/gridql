@@ -64,7 +64,7 @@ _HELP = """Queries look like:
   FIND transformers DOWNSTREAM OF "FDR-104" SELECT name, mRID, kva RETURN table
 
 Clauses:    FIND <type>, topology, WHERE, SELECT, RETURN -- in that order
-Topology:   DOWNSTREAM OF / UPSTREAM OF / CONNECTED TO / FED BY
+Topology:   DOWNSTREAM OF / UPSTREAM OF / CONNECTED TO / FED BY / PROTECTED BY
 Filters:    = != > >= < <= IN (...) CONTAINS LIKE, combined with AND / OR / NOT
 Units:      13.8kV, 500kVA, 0.5MVA -- bare numbers use the attribute's own unit
 

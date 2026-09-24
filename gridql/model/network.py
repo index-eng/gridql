@@ -27,7 +27,7 @@ import difflib
 from collections import deque
 from typing import Any, Iterable, Iterator
 
-from ..errors import GridQLNameError
+from ..errors import GridQLError, GridQLNameError
 from .device import MISSING, Breaker, Device, GridObject, Switch
 from .feeder import Feeder, Substation
 
@@ -207,6 +207,8 @@ class Network:
             return self.is_energized(obj.mrid)
         if key == "depth":
             return self.depth_of(obj.mrid)
+        if key == "protected_by":
+            return self.topology().protector.get(obj.mrid, MISSING)
         return obj.attribute(name)
 
     def depth_of(self, mrid: str) -> Any:
@@ -251,6 +253,38 @@ class Network:
         if isinstance(target, (Feeder, Substation)):
             return self.downstream_of(identifier)
         return self._resolve([target.mrid, *self.topology().descendants(target.mrid)])
+
+    def protected_by(self, identifier: str) -> list[GridObject]:
+        """The target's protection zone, nearest first, the target excluded.
+
+        That is everything below it down to, and including, the next
+        protective devices: a fault anywhere in it is the target's to clear,
+        and a fault beyond one of those is that device's. A feeder's zone is
+        its head's.
+        """
+        target = self.get(identifier)
+        if isinstance(target, Substation):
+            raise GridQLError(
+                f"'{target.mrid}' is a substation, which has a zone per feeder; "
+                "name one of its feeders, or the breaker at its head"
+            )
+        if isinstance(target, Feeder):
+            if target.head is None:
+                return []
+            feeder, target = target, self.get(target.head)
+            if not getattr(target, "PROTECTIVE", False):
+                raise GridQLError(
+                    f"feeder '{feeder.mrid}' starts at {target.TYPE} '{target.mrid}', which "
+                    "isolates no fault on its own, so the feeder has no zone of its own; "
+                    "name the breaker or recloser that protects it instead"
+                )
+        if not getattr(target, "PROTECTIVE", False):
+            raise GridQLError(
+                f"'{target.mrid}' is a {target.TYPE}, which isolates no fault on its own, "
+                "so it has no protection zone; PROTECTED BY takes a breaker, recloser, "
+                "fuse or sectionalizer, and SELECT protected_by shows which one covers it"
+            )
+        return self._resolve(self.topology().zone(target.mrid))
 
     def is_energized(self, mrid: str) -> Any:
         obj = self.objects.get(mrid)
@@ -330,6 +364,8 @@ class _Topology:
         self.loop_edges: list[tuple[str, str]] = []
         #: Devices on a feeder that its head cannot reach.
         self.unreachable: set[str] = set()
+        #: Device -> the nearest protective device above it on its feeder.
+        self.protector: dict[str, str] = {}
         self._energized: set[str] = set()
         self._build(network)
 
@@ -346,6 +382,7 @@ class _Topology:
                 self._build_feeder(network, feeder.head, own, loops)
 
         self.loop_edges = sorted(loops)
+        self._protect(network)
 
         for feeder_mrid, own in members.items():
             feeder = network.objects.get(feeder_mrid)
@@ -446,6 +483,21 @@ class _Topology:
                     continue
                 reach(neighbor, current, None)
 
+    def _protect(self, network: Network) -> None:
+        """Record, for every device on a tree, the protective device above it.
+
+        Walked in the order the trees were built, which reaches every parent
+        before its children, so each device inherits its parent's answer
+        unless the parent is itself protective.
+        """
+        for mrid, parent in self.parent.items():
+            if parent is None:
+                continue
+            if getattr(network.objects.get(parent), "PROTECTIVE", False):
+                self.protector[mrid] = parent
+            elif parent in self.protector:
+                self.protector[mrid] = self.protector[parent]
+
     def _energize(self, network: Network) -> None:
         """Flood from every feeder head over the real graph, stopping at open switches.
 
@@ -489,6 +541,13 @@ class _Topology:
         # and makes this agree with how the language reports the same query.
         found.sort(key=lambda candidate: (self.depth.get(candidate, 0), candidate))
         return found
+
+    def zone(self, mrid: str) -> list[str]:
+        """The descendants of ``mrid`` it is the nearest protection for.
+
+        Ordered like :meth:`descendants`, of which it is a subset.
+        """
+        return [m for m in self.descendants(mrid) if self.protector.get(m) == mrid]
 
     def ancestors(self, mrid: str) -> list[str]:
         chain: list[str] = []

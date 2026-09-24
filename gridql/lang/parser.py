@@ -15,6 +15,7 @@
     relation   := ("DOWNSTREAM" | "UPSTREAM") "OF" target
                 | "CONNECTED" "TO" target
                 | "FED" "BY" target
+                | "PROTECTED" "BY" target
     expr       := and_expr ( "OR" and_expr )*
     and_expr   := unary ( "AND" unary )*
     unary      := "NOT" unary | "(" expr ")" | predicate
@@ -289,7 +290,8 @@ class _Parser:
         if self.current.is_keyword("FIND"):
             raise self.error("unexpected FIND; separate statements with ';'")
         if self.current.is_keyword("WHERE", "SELECT", "GROUP", "ORDER", "LIMIT",
-                                   "DOWNSTREAM", "UPSTREAM", "CONNECTED", "FED"):
+                                   "DOWNSTREAM", "UPSTREAM", "CONNECTED", "FED",
+                                   "PROTECTED"):
             word = self.current.keyword
             raise self.error(
                 f"{word} must come earlier in the query; the order is "
@@ -419,7 +421,7 @@ class _Parser:
         return name
 
     def _at_relation(self) -> bool:
-        return self.current.is_keyword("DOWNSTREAM", "UPSTREAM", "CONNECTED", "FED")
+        return self.current.is_keyword("DOWNSTREAM", "UPSTREAM", "CONNECTED", "FED", "PROTECTED")
 
     def parse_relation(self) -> Relation:
         token = self.advance()
@@ -432,7 +434,7 @@ class _Parser:
             kind = "CONNECTED TO"
         else:
             self.expect_keyword("BY")
-            kind = "FED BY"
+            kind = f"{word} BY"
 
         target = self.current
         if target.kind is TokenKind.PARAM:
