@@ -141,6 +141,18 @@ class Contains(Node):
 
 
 @dataclass(frozen=True)
+class Like(Node):
+    """A pattern the whole value must match: ``%`` is any run, ``_`` one character."""
+
+    attribute: str
+    operand: Node
+    position: int = 0
+
+    def describe(self) -> str:
+        return f"{self.attribute} LIKE {self.operand.describe()}"
+
+
+@dataclass(frozen=True)
 class Truthy(Node):
     """A bare attribute used as a test, as in ``WHERE energized``."""
 

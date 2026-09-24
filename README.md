@@ -160,8 +160,18 @@ mentions it without a topology relation is refused rather than answered with bla
 
 ### Conditions
 
-Operators are `=`, `!=`, `>`, `>=`, `<`, `<=`, `IN (...)` and `CONTAINS`, combined with `AND`, `OR`,
-`NOT` and parentheses. `NOT` binds tightest, then `AND`, then `OR`.
+Operators are `=`, `!=`, `>`, `>=`, `<`, `<=`, `IN (...)`, `CONTAINS` and `LIKE`, combined with
+`AND`, `OR`, `NOT` and parentheses. `NOT` binds tightest, then `AND`, then `OR`.
+
+`CONTAINS` is a substring test. `LIKE` is SQL's pattern match: `%` stands for any run of characters
+and `_` for exactly one, and the pattern must match the whole value, so `LIKE "Pad"` is plain
+equality while `LIKE "Pad%"` finds every name that starts with it.
+
+```
+FIND devices      WHERE name CONTAINS "Maple"     -- Maple anywhere in the name
+FIND transformers WHERE name LIKE "Pad 40%"       -- names that start with Pad 40
+FIND fuses        WHERE mrid LIKE "FU-120_-01"    -- the first fuse on each 120x feeder
+```
 
 A bare attribute is a truth test, so `WHERE energized` and `WHERE NOT energized` read naturally.
 

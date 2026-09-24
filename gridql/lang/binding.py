@@ -28,6 +28,7 @@ from .ast import (
     Compare,
     Contains,
     In,
+    Like,
     Literal,
     Node,
     Not,
@@ -178,6 +179,8 @@ def _bind(node: Node, bindings: Mapping[str, Node]) -> Node:
         )
     if isinstance(node, Contains):
         return Contains(node.attribute, _bind(node.operand, bindings), node.position)
+    if isinstance(node, Like):
+        return Like(node.attribute, _bind(node.operand, bindings), node.position)
     if isinstance(node, In):
         return In(
             node.attribute,

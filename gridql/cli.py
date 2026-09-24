@@ -65,7 +65,7 @@ _HELP = """Queries look like:
 
 Clauses:    FIND <type>, topology, WHERE, SELECT, RETURN -- in that order
 Topology:   DOWNSTREAM OF / UPSTREAM OF / CONNECTED TO / FED BY
-Filters:    = != > >= < <= IN (...) CONTAINS, combined with AND / OR / NOT
+Filters:    = != > >= < <= IN (...) CONTAINS LIKE, combined with AND / OR / NOT
 Units:      13.8kV, 500kVA, 0.5MVA -- bare numbers use the attribute's own unit
 
 Save a query as a .gridql file and run it with:  gridql run queries/foo.gridql

@@ -175,6 +175,10 @@ class NumberLikeNameTests(unittest.TestCase):
         found = self.run_script("PARAM part\nFIND devices WHERE name CONTAINS $part", part="104")
         self.assertEqual(found, [["BRK-104"]])
 
+    def test_like_a_supplied_pattern(self):
+        found = self.run_script("PARAM pattern\nFIND devices WHERE name LIKE $pattern", pattern="%10_")
+        self.assertEqual(found, [["BRK-104"]])
+
 
 class BindingTests(unittest.TestCase):
     def setUp(self):

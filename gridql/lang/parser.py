@@ -18,7 +18,8 @@
     expr       := and_expr ( "OR" and_expr )*
     and_expr   := unary ( "AND" unary )*
     unary      := "NOT" unary | "(" expr ")" | predicate
-    predicate  := IDENT [ op operand | "IN" "(" value {"," value} ")" | "CONTAINS" value ]
+    predicate  := IDENT [ op operand | "IN" "(" value {"," value} ")"
+                        | "CONTAINS" value | "LIKE" value ]
     operand    := STRING | NUMBER | IDENT | "$" IDENT
 
 A ``$name`` stands wherever a value stands -- a relation target, an operand, a
@@ -38,6 +39,7 @@ from .ast import (
     Compare,
     Contains,
     In,
+    Like,
     Literal,
     Name,
     Node,
@@ -488,9 +490,13 @@ class _Parser:
             self.advance()
             return In(attribute, self.parse_operand_list(), position)
 
-        if self.current.is_keyword("CONTAINS", "LIKE"):
+        if self.current.is_keyword("CONTAINS"):
             self.advance()
             return Contains(attribute, self.parse_operand(), position)
+
+        if self.current.is_keyword("LIKE"):
+            self.advance()
+            return Like(attribute, self.parse_operand(), position)
 
         return Truthy(attribute, position)
 

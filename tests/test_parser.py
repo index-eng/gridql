@@ -2,7 +2,7 @@ import unittest
 
 from gridql.errors import GridQLSyntaxError
 from gridql.lang import parse, parse_script
-from gridql.lang.ast import And, Compare, Contains, In, Literal, Name, Not, Or, Quantity, Truthy
+from gridql.lang.ast import And, Compare, Contains, In, Like, Literal, Name, Not, Or, Quantity, Truthy
 
 
 class ParserTests(unittest.TestCase):
@@ -69,6 +69,11 @@ class ParserTests(unittest.TestCase):
 
     def test_contains(self):
         self.assertIsInstance(parse("FIND devices WHERE phases CONTAINS A").where, Contains)
+
+    def test_like_is_its_own_predicate(self):
+        where = parse("FIND devices WHERE name LIKE 'Pad%'").where
+        self.assertIsInstance(where, Like)
+        self.assertEqual(where.operand, Literal("Pad%"))
 
     def test_describe_round_trips_structure(self):
         source = 'FIND transformers DOWNSTREAM OF "REC-001" WHERE kva >= 500'

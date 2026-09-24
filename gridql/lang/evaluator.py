@@ -12,7 +12,9 @@ point of the layering.
 from __future__ import annotations
 
 import difflib
+import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Iterator, Mapping
 
 from ..errors import GridQLError, GridQLNameError, UnitError
@@ -25,6 +27,7 @@ from .ast import (
     Compare,
     Contains,
     In,
+    Like,
     Literal,
     Name,
     Node,
@@ -68,7 +71,7 @@ def _tested(node: Node | None) -> list[str]:
     stack = [node] if node is not None else []
     while stack:
         current = stack.pop()
-        if isinstance(current, (Compare, In, Contains, Truthy)):
+        if isinstance(current, (Compare, In, Contains, Like, Truthy)):
             found.append(current.attribute)
         elif isinstance(current, (And, Or)):
             stack.extend((current.right, current.left))
@@ -83,7 +86,7 @@ def _referenced(node: Node | None) -> set[str]:
     stack = [node] if node is not None else []
     while stack:
         current = stack.pop()
-        if isinstance(current, (Compare, In, Contains, Truthy)):
+        if isinstance(current, (Compare, In, Contains, Like, Truthy)):
             found.add(current.attribute.lower())
         if isinstance(current, (And, Or)):
             stack.extend((current.left, current.right))
@@ -91,7 +94,7 @@ def _referenced(node: Node | None) -> set[str]:
             stack.append(current.operand)
         elif isinstance(current, Compare):
             stack.append(current.operand)
-        elif isinstance(current, Contains):
+        elif isinstance(current, (Contains, Like)):
             stack.append(current.operand)
         elif isinstance(current, In):
             stack.extend(current.operands)
@@ -655,6 +658,16 @@ def _test(node: Node, obj: GridObject, context: _Context) -> bool:
             return any(_compare(item, "=", right) for item in left)
         return _as_text(right).casefold() in _as_text(left).casefold()
 
+    if isinstance(node, Like):
+        left = context.value(obj, node.attribute)
+        right = _operand(node.operand, obj, context, node.attribute)
+        if left is MISSING or left is None or right is MISSING or right is None:
+            return False
+        pattern = _pattern(_as_text(right))
+        if isinstance(left, (list, tuple, set, frozenset)):
+            return any(pattern.fullmatch(_as_text(item)) for item in left)
+        return pattern.fullmatch(_as_text(left)) is not None
+
     raise TypeError(f"cannot evaluate node {node!r}")
 
 
@@ -733,6 +746,17 @@ def _ordered(left: Any, operator: str, right: Any) -> bool:
     if operator == "<":
         return left < right
     return left <= right
+
+
+@lru_cache(maxsize=256)
+def _pattern(written: str) -> re.Pattern[str]:
+    """A LIKE pattern as a regex: ``%`` is any run of characters, ``_`` one.
+
+    It must match the whole value, as SQL's does -- ``CONTAINS`` is the
+    substring test -- and, like every string comparison here, ignores case.
+    """
+    parts = (".*" if char == "%" else "." if char == "_" else re.escape(char) for char in written)
+    return re.compile("".join(parts), re.IGNORECASE | re.DOTALL)
 
 
 def _as_text(value: Any) -> str:

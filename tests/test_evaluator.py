@@ -118,6 +118,28 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(self.run_query("FIND devices WHERE name CONTAINS 'Maple'"),
                          ["LOAD-002", "SW-002", "XFMR-002"])
 
+    def test_like_percent_matches_any_run(self):
+        self.assertEqual(self.run_query("FIND devices WHERE name LIKE 'maple%'"),
+                         ["LOAD-002", "SW-002", "XFMR-002"])
+        self.assertEqual(self.run_query("FIND devices WHERE name LIKE '%bank'"),
+                         ["XFMR-001", "XFMR-002"])
+
+    def test_like_underscore_matches_one_character(self):
+        self.assertEqual(self.run_query("FIND devices WHERE mrid LIKE 'LN-00_'"), ["LN-001", "LN-002"])
+        self.assertEqual(self.run_query("FIND devices WHERE mrid LIKE 'LN-0_'"), [])
+
+    def test_like_matches_the_whole_value_not_a_substring(self):
+        # CONTAINS is the substring test; LIKE without a wildcard is equality.
+        self.assertEqual(self.run_query("FIND devices WHERE name LIKE 'Maple'"), [])
+        self.assertEqual(self.run_query("FIND devices WHERE name LIKE 'maple ln bank'"), ["XFMR-002"])
+
+    def test_like_treats_other_characters_literally(self):
+        self.assertEqual(self.run_query("FIND devices WHERE name LIKE 'Tie to FDR-10.'"), [])
+        self.assertEqual(self.run_query("FIND devices WHERE name LIKE 'Tie to FDR-10_'"), ["TIE-001"])
+
+    def test_not_like(self):
+        self.assertEqual(self.run_query("FIND transformers WHERE NOT name LIKE 'elm%'"), ["XFMR-002"])
+
     def test_bare_attribute_is_a_truth_test(self):
         self.assertEqual(self.run_query("FIND switches WHERE is_tie"), ["TIE-001"])
         self.assertEqual(self.run_query("FIND loads WHERE NOT energized"), ["LOAD-002"])

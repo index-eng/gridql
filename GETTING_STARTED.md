@@ -229,11 +229,13 @@ FIND devices DOWNSTREAM OF "REC-1201-01" WHERE hops <= 1
 FIND switches WHERE state != normal_state        -- anything out of normal position
 FIND devices  WHERE type IN (load, transformer)
 FIND devices  WHERE phases CONTAINS A
+FIND devices  WHERE name LIKE "Maple%"           -- % is any run of characters, _ is one
 FIND loads    WHERE NOT energized
 ```
 
-Operators are `=`, `!=`, `>`, `>=`, `<`, `<=`, `IN (...)` and `CONTAINS`, combined with `AND`,
-`OR`, `NOT` and parentheses. String comparison is case-insensitive.
+Operators are `=`, `!=`, `>`, `>=`, `<`, `<=`, `IN (...)`, `CONTAINS` and `LIKE`, combined with
+`AND`, `OR`, `NOT` and parentheses. String comparison is case-insensitive. `CONTAINS` finds text
+anywhere in a value; `LIKE` matches the whole value against a pattern, the way SQL's does.
 
 Clause order is `FIND`, topology, `WHERE`, `SELECT`, `GROUP BY`, `ORDER BY`, `LIMIT`, `RETURN`; a
 clause out of place says which one and where.
