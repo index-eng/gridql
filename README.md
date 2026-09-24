@@ -2,6 +2,113 @@
 
 A domain-specific query language for electric utility data and power-system models.
 
+## What is GridQL?
+
+The grid that brings electricity to homes and businesses is a huge web of equipment: substations,
+power lines, transformers on poles, and switches and fuses that cut the power off when something
+goes wrong. Utilities keep a record of every piece of it, and of how each piece is wired to the
+next, in databases that can hold hundreds of thousands of entries.
+
+GridQL is a way of asking questions of that record in the grid's own words. You describe what you
+want the way someone at a utility would say it out loud — *the customers beyond this switch*, *the
+large transformers on this circuit* — and GridQL works out where the answer lives and how to find
+it.
+
+The aim is to let the people who know the grid — engineers, planners, operators, analysts — get
+answers from the data themselves, without having to learn how the database is organised or wait for
+a specialist to write the query for them.
+
+### Two examples
+
+A *recloser* is an automatic circuit breaker partway along a power line. If it trips, everything
+beyond it goes dark. Which customers would that affect?
+
+```
+$ gridql 'FIND loads DOWNSTREAM OF "REC-1201-01" SELECT name, kw'
+name                        kw
+--------------------------  ---
+Cedar Hill Plaza - Grocery  395
+Cedar Hill Plaza - Retail   150
+Ridge Rd Farm Supply        42
+Oak St 201-211              18
+Birchwood Ct 2-12           26
+Quarry Ln 3-9               12
+Oak St 213-219              10
+Cedar Hill Elementary       210
+Birchwood Ct 14-24          25
+Quarry Ln 11-19             17
+
+10 rows
+```
+
+A *load* is anything drawing power — here a grocery store, a school, a farm supply and rows of
+houses — and `kw` is how much each one uses.
+
+And which customers have no power right now?
+
+```
+$ gridql 'FIND loads WHERE NOT energized SELECT name, kw'
+name             kw
+---------------  --
+Quarry Ln 3-9    12
+Quarry Ln 11-19  17
+
+2 rows
+```
+
+Nobody told GridQL which houses were out. It knows a fuse on Quarry Lane is open, and it followed
+the wires to find who sits behind it.
+
+### Why not just use SQL?
+
+SQL is the standard language for asking questions of a database, and it is very good at it. But
+SQL only knows about tables, rows and columns. It has no idea what a feeder is, which way power
+flows, or that an open switch means the lights are off on the other side of it.
+
+So in SQL, "which customers are beyond this recloser?" becomes a puzzle. You have to know which
+tables hold the equipment and which hold the connections between them, then write a query that
+walks those connections one step at a time, in the right direction, without wandering onto the
+neighbouring circuit. For a typical database it looks something like this:
+
+```sql
+WITH RECURSIVE beyond(mrid) AS (
+    SELECT c.to_device
+      FROM connection c
+     WHERE c.from_device = 'REC-1201-01'
+    UNION
+    SELECT c.to_device
+      FROM connection c
+      JOIN beyond b    ON c.from_device = b.mrid
+      JOIN equipment e ON e.mrid = c.to_device
+     WHERE e.feeder = 'FDR-1201'
+)
+SELECT e.name, l.kw
+  FROM beyond b
+  JOIN equipment e ON e.mrid = b.mrid
+  JOIN load l      ON l.mrid = e.mrid;
+```
+
+— and that is the easy version, which assumes the data already records which way power flows. Real
+utility data usually does not. In GridQL the same question is one line, and "downstream of" is part
+of the language.
+
+You might choose GridQL because:
+
+- **It speaks the grid's language.** Feeders, transformers, reclosers, phases and voltages are
+  built in, so a query reads like the question it answers.
+- **It understands how the grid is wired.** Upstream, downstream, what a fuse protects, and what is
+  energised right now are all things you can ask for directly.
+- **You do not need to know the database.** GridQL reads spreadsheet exports, SQLite and Postgres
+  databases, and industry-standard CIM and OpenDSS files, and the same query works on all of them.
+- **Queries are short enough to share.** A colleague who has never written code can read one, check
+  it asks the right thing, and run it again next week.
+
+GridQL is not a replacement for SQL everywhere. Billing, work orders and anything else that is not
+about how the grid is connected are still SQL's job. GridQL is for the questions where the wiring
+is the point.
+
+## For engineers
+
 GridQL lets engineers query the grid with the concepts they already use — feeders, substations,
 transformers, switches, reclosers, phases, voltage levels and electrical topology — instead of
 learning a database schema.
