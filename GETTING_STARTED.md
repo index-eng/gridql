@@ -782,7 +782,6 @@ save_network(network, "grid.sqlite")
 | `project.gridqlconfig` | this repository's own project file |
 | `tests/` | the test suite |
 | `tests/reference/` | fetches the IEEE test feeders the reference-model tests read |
-| `idea.md` | the original design notes this was built from |
 
 ## Not built yet
 
