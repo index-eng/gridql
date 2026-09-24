@@ -18,6 +18,8 @@ htmlcov/
 .vscode/
 *.sqlite
 *.db
+idea.md
+idea-plan.md 
 
 # Reference feeders, fetched by tests/reference/fetch.py
 tests/reference/models/
