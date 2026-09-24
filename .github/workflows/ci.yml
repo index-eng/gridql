@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test on Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      GRIDQL_TEST_POSTGRES: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install ".[postgres]"
+      - name: Cache the reference feeders
+        uses: actions/cache@v6
+        with:
+          path: tests/reference/models
+          key: reference-models-${{ hashFiles('tests/reference/fetch.py') }}
+      - name: Fetch the reference feeders
+        run: python tests/reference/fetch.py
+      # The Postgres and reference-model tests skip when their server or files
+      # are missing. Here both are provided, so a skip means CI is misconfigured.
+      - name: Run the tests
+        shell: bash
+        run: |
+          python -m unittest discover -s tests 2>&1 | tee "$RUNNER_TEMP/tests.log"
+          if grep -q "skipped=" "$RUNNER_TEMP/tests.log"; then
+            echo "::error::Tests were skipped; the Postgres service or reference feeders are missing"
+            exit 1
+          fi
+
+  package:
+    name: Build the package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Build
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+      # From outside the repository, so the wheel has to carry everything it needs.
+      - name: Try the wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install dist/*.whl
+          cd "$RUNNER_TEMP"
+          export PATH="$RUNNER_TEMP/venv/bin:$PATH"
+          gridql --version
+          gridql 'FIND reclosers'
+          gridql init grid.sqlite
+          gridql --db grid.sqlite 'FIND feeders'

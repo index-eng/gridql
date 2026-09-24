@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gridql"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A query language for electric utility networks"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,6 +24,10 @@ postgres = ["psycopg[binary]>=3.1"]
 
 [project.scripts]
 gridql = "gridql.cli:main"
+
+[tool.setuptools.dynamic]
+# One place to bump: gridql/version.py, which --version also reads.
+version = { attr = "gridql.version.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["gridql*"]
