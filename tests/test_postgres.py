@@ -3,7 +3,9 @@
 The tests that need a server start a throwaway cluster of their own when
 Postgres is installed (initdb and pg_ctl on the PATH), or use the server
 GRIDQL_TEST_POSTGRES names -- a connection string for a role that may create
-databases. Without either they are skipped; the rest need no server.
+databases, on a server that trusts it without a password (some tests connect
+with a made-up one to check it is never printed). Without either they are
+skipped; the rest need no server.
 """
 
 import contextlib
