@@ -186,8 +186,11 @@ class ExampleTests(ServerTestCase):
     def test_the_report_names_the_database_and_never_the_password(self):
         with_password = make_conninfo(self.database, password="hunter2")
         document = read_postgres(with_password, EXAMPLE_MAPPING)
-        dbname = psycopg.conninfo.conninfo_to_dict(self.database)["dbname"]
-        self.assertIn(f"Postgres database {dbname} on 127.0.0.1", document.network.source)
+        conninfo = psycopg.conninfo.conninfo_to_dict(self.database)
+        self.assertIn(
+            f"Postgres database {conninfo['dbname']} on {conninfo['host']}",
+            document.network.source,
+        )
         self.assertNotIn("hunter2", document.network.source)
 
     def test_nothing_is_written_to_the_database(self):
