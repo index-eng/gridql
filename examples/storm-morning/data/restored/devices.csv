@@ -1,0 +1,55 @@
+mrid,name,type,feeder,substation,phases,voltage,state,normal_state,is_tie,kva,primary_voltage,secondary_voltage,kw,kvar,customer_count,length,conductor,ampacity,from_node,to_node
+BKR-701,Millbrook North Breaker,breaker,FDR-701,SUB-7,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,,7000,7001
+UG-701-01,UG-701-01,line,FDR-701,SUB-7,ABC,12.47,,,,,,,,,,700,1000 AL XLP,575,7001,7002
+OH-701-01,OH-701-01,line,FDR-701,SUB-7,ABC,12.47,,,,,,,,,,2400,477 ACSR Hawk,659,7002,7003
+FU-701-01,Church St tap,fuse,FDR-701,SUB-7,A,12.47,CLOSED,CLOSED,false,,,,,,,,,,7003,7010
+OH-701-11,OH-701-11,line,FDR-701,SUB-7,A,12.47,,,,,,,,,,650,#2 ACSR Sparrow,184,7010,7011
+TX-7011,Pole 7011,transformer,FDR-701,SUB-7,A,12.47,,,,50,7.2,0.24,,,,,,,7011,7012
+SP-7012,Church St 1-15,load,FDR-701,SUB-7,A,0.24,,,,,,,34,9,8,,,,7012,
+REC-701-01,Mill Pond Recloser,recloser,FDR-701,SUB-7,ABC,12.47,OPEN,CLOSED,false,,,,,,,,,,7003,7004
+OH-701-02,OH-701-02,line,FDR-701,SUB-7,ABC,12.47,,,,,,,,,,1900,336.4 ACSR Linnet,529,7004,7005
+FU-701-02,Mill Pond Rd tap,fuse,FDR-701,SUB-7,B,12.47,CLOSED,CLOSED,false,,,,,,,,,,7005,7020
+OH-701-21,OH-701-21,line,FDR-701,SUB-7,B,12.47,,,,,,,,,,800,#2 ACSR Sparrow,184,7020,7021
+TX-7021,Pole 7021,transformer,FDR-701,SUB-7,B,12.47,,,,37.5,7.2,0.24,,,,,,,7021,7022
+SP-7022,Mill Pond Rd 2-20,load,FDR-701,SUB-7,B,0.24,,,,,,,22,6,6,,,,7022,
+OH-701-22,OH-701-22,line,FDR-701,SUB-7,B,12.47,,,,,,,,,,500,#2 ACSR Sparrow,184,7021,7023
+TX-7023,Pole 7023,transformer,FDR-701,SUB-7,B,12.47,,,,25,7.2,0.24,,,,,,,7023,7024
+SP-7024,Mill Pond Rd 22-30,load,FDR-701,SUB-7,B,0.24,,,,,,,14,4,4,,,,7024,
+SW-701-02,Pine St Switch,switch,FDR-701,SUB-7,ABC,12.47,OPEN,CLOSED,false,,,,,,,,,,7005,7006
+OH-701-03,OH-701-03,line,FDR-701,SUB-7,ABC,12.47,,,,,,,,,,1500,336.4 ACSR Linnet,529,7006,7007
+FU-701-03,Millbrook High riser,fuse,FDR-701,SUB-7,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,,7007,7030
+UG-701-31,UG-701-31,line,FDR-701,SUB-7,ABC,12.47,,,,,,,,,,380,1/0 AL XLP,175,7030,7031
+TX-7031,Pad 7031,transformer,FDR-701,SUB-7,ABC,12.47,,,,500,12.47,0.48,,,,,,,7031,7032
+SP-7032,Millbrook High School,load,FDR-701,SUB-7,ABC,0.48,,,,,,,240,80,1,,,,7032,
+OH-701-04,OH-701-04,line,FDR-701,SUB-7,ABC,12.47,,,,,,,,,,1200,336.4 ACSR Linnet,529,7007,7008
+FU-701-04,Orchard Ln tap,fuse,FDR-701,SUB-7,C,12.47,CLOSED,CLOSED,false,,,,,,,,,,7008,7040
+OH-701-41,OH-701-41,line,FDR-701,SUB-7,C,12.47,,,,,,,,,,600,#2 ACSR Sparrow,184,7040,7041
+TX-7041,Pole 7041,transformer,FDR-701,SUB-7,C,12.47,,,,50,7.2,0.24,,,,,,,7041,7042
+SP-7042,Orchard Ln 1-13,load,FDR-701,SUB-7,C,0.24,,,,,,,28,8,7,,,,7042,
+FU-701-05,Maplewood Care riser,fuse,FDR-701,SUB-7,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,,7008,7050
+TX-7051,Pole 7051,transformer,FDR-701,SUB-7,ABC,12.47,,,,150,12.47,0.208,,,,,,,7050,7051
+SP-7051,Maplewood Care Home,load,FDR-701,SUB-7,ABC,0.208,,,,,,,95,30,1,,,,7051,
+OH-701-05,OH-701-05,line,FDR-701,SUB-7,ABC,12.47,,,,,,,,,,900,336.4 ACSR Linnet,529,7008,7009
+TIE-701-702,Tie to Millbrook South,switch,FDR-701,SUB-7,ABC,12.47,CLOSED,OPEN,true,,,,,,,,,,7009,8009
+BKR-702,Millbrook South Breaker,breaker,FDR-702,SUB-7,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,,8000,8001
+UG-702-01,UG-702-01,line,FDR-702,SUB-7,ABC,12.47,,,,,,,,,,620,1000 AL XLP,575,8001,8002
+OH-702-01,OH-702-01,line,FDR-702,SUB-7,ABC,12.47,,,,,,,,,,2100,477 ACSR Hawk,659,8002,8003
+FU-702-01,Station Rd tap,fuse,FDR-702,SUB-7,A,12.47,CLOSED,CLOSED,false,,,,,,,,,,8003,8010
+OH-702-11,OH-702-11,line,FDR-702,SUB-7,A,12.47,,,,,,,,,,700,#2 ACSR Sparrow,184,8010,8011
+TX-8011,Pole 8011,transformer,FDR-702,SUB-7,A,12.47,,,,50,7.2,0.24,,,,,,,8011,8012
+SP-8012,Station Rd 3-19,load,FDR-702,SUB-7,A,0.24,,,,,,,31,8,8,,,,8012,
+OH-702-02,OH-702-02,line,FDR-702,SUB-7,ABC,12.47,,,,,,,,,,1800,336.4 ACSR Linnet,529,8003,8004
+REC-702-01,Willow Recloser,recloser,FDR-702,SUB-7,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,,8004,8005
+OH-702-03,OH-702-03,line,FDR-702,SUB-7,ABC,12.47,,,,,,,,,,1400,336.4 ACSR Linnet,529,8005,8006
+FU-702-02,Millbrook Grocery riser,fuse,FDR-702,SUB-7,ABC,12.47,CLOSED,CLOSED,false,,,,,,,,,,8006,8030
+UG-702-31,UG-702-31,line,FDR-702,SUB-7,ABC,12.47,,,,,,,,,,300,1/0 AL XLP,175,8030,8031
+TX-8031,Pad 8031,transformer,FDR-702,SUB-7,ABC,12.47,,,,300,12.47,0.48,,,,,,,8031,8032
+SP-8032,Millbrook Grocery,load,FDR-702,SUB-7,ABC,0.48,,,,,,,185,60,1,,,,8032,
+FU-702-03,Willow Way tap,fuse,FDR-702,SUB-7,C,12.47,CLOSED,CLOSED,false,,,,,,,,,,8006,8020
+OH-702-21,OH-702-21,line,FDR-702,SUB-7,C,12.47,,,,,,,,,,550,#2 ACSR Sparrow,184,8020,8021
+TX-8021,Pole 8021,transformer,FDR-702,SUB-7,C,12.47,,,,37.5,7.2,0.24,,,,,,,8021,8022
+SP-8022,Willow Way 2-18,load,FDR-702,SUB-7,C,0.24,,,,,,,21,6,6,,,,8022,
+OH-702-22,OH-702-22,line,FDR-702,SUB-7,C,12.47,,,,,,,,,,420,#2 ACSR Sparrow,184,8021,8023
+TX-8023,Pole 8023,transformer,FDR-702,SUB-7,C,12.47,,,,25,7.2,0.24,,,,,,,8023,8024
+SP-8024,Willow Way 20-30,load,FDR-702,SUB-7,C,0.24,,,,,,,16,5,5,,,,8024,
+OH-702-04,OH-702-04,line,FDR-702,SUB-7,ABC,12.47,,,,,,,,,,1300,336.4 ACSR Linnet,529,8006,8009

@@ -1,0 +1,20 @@
+# Storm morning in Millbrook: a small project that walks one outage from
+# first light to restoration. Run from this directory:
+#
+#   gridql run outage                          # 06:40, what the storm left
+#   gridql run isolate                         # the switching plan
+#   gridql run restore --csv data/restored     # 09:30, after the switching
+#
+# The project reads the 06:40 snapshot; data/restored is the same network
+# three switch operations later.
+
+name    = "Storm morning in Millbrook"
+csv     = "data/storm"
+queries = "queries"
+
+# The outage the queries are about. Each applies only to the files that
+# declare it, and --<name> on the command line beats it.
+[params]
+tripped = "REC-701-01"   # the device that operated
+fault   = "OH-701-02"    # the span the line patrol found the tree on
+isolate = "SW-701-02"    # the switch that cuts the fault off from the rest

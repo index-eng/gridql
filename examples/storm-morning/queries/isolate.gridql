@@ -1,0 +1,43 @@
+-- The switching plan for the tree on Millbrook North.
+--
+--   gridql run isolate
+--
+-- The recloser saw the fault and locked out, taking everything below it
+-- with it. The line patrol has since found the tree on one span. The plan
+-- is to cut that span off at both ends, then feed what lies beyond it from
+-- the neighbouring feeder through the tie.
+
+PARAM tripped = "REC-701-01"
+PARAM fault   = "OH-701-02"
+PARAM isolate = "SW-701-02"
+
+-- Everything the recloser cut off, nearest first. DOWNSTREAM OF follows
+-- the circuit as it is built, not as it is switched right now, so this is
+-- the same list whether the recloser is open or closed.
+FIND loads
+DOWNSTREAM OF $tripped
+SELECT mRID, name, customer_count, kw, hops;
+
+-- The switches at the ends of the faulted span: the recloser upstream,
+-- already open, and the switch downstream that has to be opened. The
+-- lateral fuse hangs off the same span, so its customers stay out until
+-- the tree is cleared.
+FIND switches
+CONNECTED TO $fault
+SELECT mRID, name, type, state;
+
+-- What opening that switch leaves healthy but dark: the customers a tie
+-- could pick up.
+FIND loads
+DOWNSTREAM OF $isolate
+SELECT mRID, name, customer_count, kw;
+
+FIND loads
+DOWNSTREAM OF $isolate
+SELECT COUNT(*), SUM(customer_count), SUM(kw);
+
+-- The tie at the far end of the section, which is how they get fed.
+FIND switches
+DOWNSTREAM OF $isolate
+WHERE is_tie
+SELECT mRID, name, state

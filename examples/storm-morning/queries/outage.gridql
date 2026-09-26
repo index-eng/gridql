@@ -1,0 +1,29 @@
+-- 06:40, the morning after the storm: what is out, and where to look.
+--
+--   gridql run outage
+
+-- Anything not in its normal position is where to start. A recloser that
+-- has locked out, or a fuse that has blown, reads OPEN where it should be
+-- CLOSED.
+FIND switches
+WHERE state != normal_state
+SELECT mRID, name, feeder, state, normal_state;
+
+-- Who is without power.
+FIND loads
+WHERE NOT energized
+SELECT mRID, name, feeder, customer_count, kw;
+
+-- And how much of it, feeder by feeder.
+FIND loads
+WHERE NOT energized
+SELECT feeder, SUM(customer_count), SUM(kw)
+GROUP BY feeder;
+
+-- Fuses that are dead but not blown. They are CLOSED and intact, and only
+-- dark because something above them opened, so a crew sent to re-fuse
+-- them would find nothing to do. The fuse that did blow is not here: its
+-- source side is still live.
+FIND fuses
+WHERE NOT energized
+SELECT mRID, name, state

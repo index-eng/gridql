@@ -1,0 +1,36 @@
+-- 09:30, after the switching: the Pine St switch is open, the tie is
+-- closed, and the Willow Way fuse has been replaced.
+--
+--   gridql run restore --csv data/restored
+
+PARAM isolate = "SW-701-02"
+
+-- What the operators changed, against the normal configuration. Every row
+-- here has to go back before the day is done.
+FIND switches
+WHERE state != normal_state
+SELECT mRID, name, feeder, state, normal_state;
+
+-- Who is still out: the customers on the faulted span, waiting on the
+-- tree crew.
+FIND loads
+WHERE NOT energized
+SELECT mRID, name, feeder, customer_count, kw;
+
+-- The customers back on through the tie. Their feeder has not changed:
+-- they still belong to Millbrook North, and are only borrowing Millbrook
+-- South's supply until the fault is repaired.
+FIND loads
+DOWNSTREAM OF $isolate
+WHERE energized
+SELECT mRID, name, feeder, customer_count, kw;
+
+-- The extra load Millbrook South is now carrying, beside its own.
+FIND loads
+DOWNSTREAM OF $isolate
+WHERE energized
+SELECT SUM(kw);
+
+FIND loads
+FED BY "FDR-702"
+SELECT SUM(kw)
