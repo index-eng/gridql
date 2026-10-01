@@ -105,6 +105,38 @@ class EnergisationTests(unittest.TestCase):
         # Behind a switch known to be open, it is dead whatever is above.
         self.assertIs(value("LOAD-002"), False)
 
+    def test_generation_behind_an_open_switch_makes_the_section_unknown(self):
+        network = build_sample_network()
+        network.objects["FDR-104"].add_device(
+            "PV-001", after="XFMR-002", extras={"cim_class": "PowerElectronicsConnection"}
+        )
+        value = lambda mrid: execute(
+            network, f'FIND devices WHERE mrid = "{mrid}" SELECT energized'
+        ).rows()[0]["energized"]
+        # SW-002 is open: the lateral may be backfed by the PV, so it is not known dead.
+        self.assertIs(value("SW-002"), True)  # live on its source side
+        for mrid in ("XFMR-002", "LOAD-002", "PV-001"):
+            with self.subTest(mrid=mrid):
+                self.assertIsNone(value(mrid))
+        self.assertEqual(mrids(network, "FIND loads WHERE NOT energized"), [])
+
+    def test_generation_the_feeder_reaches_changes_nothing(self):
+        network = build_sample_network()
+        network.objects["FDR-104"].add_device(
+            "GEN-001", after="LOAD-001", extras={"cim_class": "SynchronousMachine"}
+        )
+        self.assertEqual(mrids(network, "FIND devices WHERE energized IS MISSING"), [])
+        self.assertEqual(
+            mrids(network, "FIND devices WHERE NOT energized"), ["LOAD-002", "XFMR-002"]
+        )
+
+    def test_equipment_that_cannot_generate_does_not_backfeed(self):
+        network = build_sample_network()
+        network.objects["FDR-104"].add_device(
+            "SC-001", after="XFMR-002", extras={"cim_class": "SeriesCompensator"}
+        )
+        self.assertEqual(mrids(network, "FIND devices WHERE energized IS MISSING"), [])
+
     def test_a_tripped_feeder_breaker_leaves_the_feeder_out(self):
         network = build_sample_network()
         network.objects["BRK-001"].state = "OPEN"

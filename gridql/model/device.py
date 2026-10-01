@@ -42,6 +42,20 @@ class _Missing:
 
 MISSING = _Missing()
 
+#: CIM classes of equipment that can put power onto the network: machines,
+#: inverters (PV, storage, wind) and sources. GridQL has no class for them yet,
+#: so they arrive as plain devices carrying the class their source named.
+GENERATING_CLASSES = frozenset({
+    "EnergySource", "SynchronousMachine", "AsynchronousMachine", "PowerElectronicsConnection",
+})
+
+
+def can_generate(obj: Any) -> bool:
+    """Whether ``obj`` is equipment that could energise what it is connected to."""
+    extras = getattr(obj, "extras", None) or {}
+    return extras.get("cim_class") in GENERATING_CLASSES
+
+
 #: Attributes every grid object answers to, regardless of its dataclass fields.
 DERIVED_ATTRS = frozenset(
     {"mrid", "id", "name", "type", "cim_class", "energized", "depth", "hops", "protected_by"}

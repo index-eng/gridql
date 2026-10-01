@@ -188,9 +188,12 @@ That means closing a normally open tie can cause the neighbouring feeder to beco
 another source.
 
 Where the model cannot say, `energized` is unknown rather than false: equipment on a feeder with no
-head device, and anything beyond a switch whose state is neither `OPEN` nor `CLOSED`. An unknown
-value matches neither `WHERE energized` nor `WHERE NOT energized`; `WHERE energized IS MISSING`
-finds it.
+head device, anything beyond a switch whose state is neither `OPEN` nor `CLOSED`, and a section cut
+off from its feeder with generation on it (a generator, an inverter, or another source), which may be
+backfed. Generation is recognised by its CIM class (`SynchronousMachine`, `AsynchronousMachine`,
+`PowerElectronicsConnection`, `EnergySource`), which the OpenDSS and CIM importers record and a CSV
+`cim_class` column can set. An unknown value matches neither `WHERE energized` nor
+`WHERE NOT energized`; `WHERE energized IS MISSING` finds it.
 
 A feeder is energised when its head device is energised and closed, so a feeder whose breaker has
 tripped is not.

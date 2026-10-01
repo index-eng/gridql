@@ -28,7 +28,7 @@ from collections import deque
 from typing import Any, Iterable, Iterator
 
 from ..errors import GridQLError, GridQLNameError
-from .device import MISSING, VALID_STATES, Breaker, Device, GridObject, Switch
+from .device import MISSING, VALID_STATES, Breaker, Device, GridObject, Switch, can_generate
 from .feeder import Feeder, Substation
 
 
@@ -621,10 +621,14 @@ class _Topology:
         An open device is itself still energised -- it has source-side
         potential -- but nothing beyond it is.
 
-        Two things leave the answer unknown rather than false, because the
+        Three things leave the answer unknown rather than false, because the
         model cannot say: a switch whose state is neither OPEN nor CLOSED
-        (whatever is beyond it may or may not be live), and equipment on a
-        feeder with no head (its source is not recorded). Unknown spreads
+        (whatever is beyond it may or may not be live), equipment on a
+        feeder with no head (its source is not recorded), and generation the
+        feeder heads do not reach. A section cut off with a generator or an
+        inverter on it is not known to be dead: whether that backfeeds it
+        depends on anti-islanding and dispatch, which the model does not
+        hold, and calling it dead is the dangerous mistake. Unknown spreads
         the way energy would, stopping at open switches, and never covers
         equipment a known source already reaches.
         """
@@ -659,6 +663,7 @@ class _Topology:
             for device in network.devices
             if device.feeder is not None and device.feeder not in sourced
         )
+        unknown.extend(device.mrid for device in network.devices if can_generate(device))
         while unknown:
             current = unknown.popleft()
             if current in self._energized or current in self._unknown:
