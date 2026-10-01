@@ -189,6 +189,7 @@ class _Reader:
             raise PostgresError(f"{where}: {_message(error)}{hint}") from error
 
         self.report.notes.extend(bound.notes())
+        self.report.cautions.extend(bound.cautions())
         return rows
 
     def _select(self, name: str, where: str):

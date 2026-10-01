@@ -28,7 +28,7 @@ from collections import deque
 from typing import Any, Iterable, Iterator
 
 from ..errors import GridQLError, GridQLNameError
-from .device import MISSING, Breaker, Device, GridObject, Switch
+from .device import MISSING, VALID_STATES, Breaker, Device, GridObject, Switch
 from .feeder import Feeder, Substation
 
 
@@ -50,6 +50,9 @@ class Network:
         # records the revision it was built at and rebuilds when they differ.
         self._revision = 0
         self._topology_revision = -1
+        #: Feeder -> its equipment, rebuilt like the topology when stale.
+        self._by_feeder: dict[str, list[Device]] = {}
+        self._members_revision = -1
 
     # -- construction ---------------------------------------------------
 
@@ -125,15 +128,31 @@ class Network:
     # -- lookup ---------------------------------------------------------
 
     def get(self, identifier: str) -> GridObject:
-        """Resolve an mRID or name, case-insensitively, or raise."""
+        """Resolve an mRID or name, case-insensitively, or raise.
+
+        An exact mRID wins, then an mRID in another case, then a name. Names
+        are rarely unique -- every feeder may have a "Midline Recloser" --
+        so a word that names several objects is refused, listing them,
+        rather than answered for whichever came first.
+        """
         obj = self.objects.get(identifier)
         if obj is not None:
             return obj
 
         wanted = identifier.casefold()
-        for candidate in self.objects.values():
-            if candidate.mrid.casefold() == wanted or candidate.name.casefold() == wanted:
-                return candidate
+        for matches in (
+            [c for c in self.objects.values() if c.mrid.casefold() == wanted],
+            [c for c in self.objects.values() if c.name.casefold() == wanted],
+        ):
+            if len(matches) == 1:
+                return matches[0]
+            if matches:
+                described = ", ".join(_described(match) for match in matches[:6])
+                more = f" and {len(matches) - 6} more" if len(matches) > 6 else ""
+                raise GridQLNameError(
+                    f"'{identifier}' could mean any of {len(matches)} objects: "
+                    f"{described}{more}; name one by its mRID"
+                )
 
         raise GridQLNameError(
             f"no device, feeder or substation named '{identifier}'",
@@ -163,6 +182,21 @@ class Network:
     @property
     def substations(self) -> list[Substation]:
         return [obj for obj in self.objects.values() if isinstance(obj, Substation)]
+
+    def members(self, feeder: str) -> list[Device]:
+        """The equipment on a feeder, in the order it was added.
+
+        Indexed once per change to the model, so asking for every feeder's
+        members costs one pass over the network rather than one per feeder.
+        """
+        if self._members_revision != self._revision:
+            index: dict[str, list[Device]] = {}
+            for device in self.devices:
+                if device.feeder is not None:
+                    index.setdefault(device.feeder, []).append(device)
+            self._by_feeder = index
+            self._members_revision = self._revision
+        return list(self._by_feeder.get(feeder, ()))
 
     def neighbors(self, mrid: str) -> set[str]:
         return set(self._adjacency.get(mrid, ()))
@@ -231,20 +265,37 @@ class Network:
             return [obj for obj in self.devices if obj.feeder == target.mrid]
         if isinstance(target, Substation):
             return [obj for obj in self.devices if obj.substation == target.mrid]
+        self._require_tree(target, "DOWNSTREAM OF")
         return self._resolve(self.topology().descendants(target.mrid))
 
     def upstream_of(self, identifier: str) -> list[GridObject]:
         """Everything between the target and its feeder head, target excluded."""
         target = self.get(identifier)
         if isinstance(target, (Feeder, Substation)):
-            return []
+            raise GridQLError(
+                f"'{target.mrid}' is a {target.TYPE}, and UPSTREAM OF walks from a piece of "
+                "equipment back to its feeder head, so a container has nothing upstream of it; "
+                "name a device on it instead"
+            )
+        self._require_tree(target, "UPSTREAM OF")
         return self._resolve(self.topology().ancestors(target.mrid))
 
     def connected_to(self, identifier: str) -> list[GridObject]:
         """Immediate neighbours of the target."""
         target = self.get(identifier)
+        if isinstance(target, Substation):
+            raise GridQLError(
+                f"'{target.mrid}' is a substation, which has no terminals of its own, so "
+                "nothing is connected to it; name a piece of its equipment, or one of its "
+                "feeders' head devices"
+            )
         if isinstance(target, Feeder):
-            return [] if target.head is None else self._resolve(self.neighbors(target.head))
+            if target.head is None or target.head not in self.objects:
+                raise GridQLError(
+                    f"CONNECTED TO a feeder means its head device's neighbours, and feeder "
+                    f"'{target.mrid}' has no head device; name a piece of its equipment instead"
+                )
+            return self._resolve(self.neighbors(target.head))
         return self._resolve(self.neighbors(target.mrid))
 
     def fed_by(self, identifier: str) -> list[GridObject]:
@@ -252,7 +303,47 @@ class Network:
         target = self.get(identifier)
         if isinstance(target, (Feeder, Substation)):
             return self.downstream_of(identifier)
+        self._require_tree(target, "FED BY")
         return self._resolve([target.mrid, *self.topology().descendants(target.mrid)])
+
+    def _require_tree(self, target: GridObject, relation: str) -> None:
+        """Refuse a tree relation whose target is on no feeder tree, saying why.
+
+        Off the tree, "below" and "above" have no meaning, and an empty answer
+        would read as "nothing there" when the truth is "cannot tell".
+        """
+        if target.mrid in self.topology().parent:
+            return
+        problem = self.placement_problem(target)
+        raise GridQLError(f"cannot answer {relation} \"{target.mrid}\": {problem}")
+
+    def placement_problem(self, target: GridObject) -> str:
+        """Why a device is on no feeder tree, as a sentence fragment."""
+        feeder_mrid = getattr(target, "feeder", None)
+        if feeder_mrid is None:
+            return (
+                f"it is on no feeder, so it belongs to no feeder tree and GridQL cannot "
+                "tell which way is downstream"
+            )
+        feeder = self.objects.get(feeder_mrid)
+        if not isinstance(feeder, Feeder):
+            return f"it names feeder '{feeder_mrid}', which does not exist"
+        if feeder.head is None:
+            return (
+                f"its feeder {feeder.mrid} has no head device, so GridQL cannot tell which "
+                "way is downstream; record the feeder's head ('gridql validate' reports "
+                "it as headless-feeder)"
+            )
+        head = self.objects.get(feeder.head)
+        if not isinstance(head, Device) or head.feeder != feeder.mrid:
+            return (
+                f"its feeder {feeder.mrid} names head '{feeder.head}', which is not "
+                "equipment on that feeder, so the feeder has no tree"
+            )
+        return (
+            f"it is on {feeder.mrid} but cannot be reached from the feeder's head "
+            f"{feeder.head}, so it is on an island and has no place in the tree"
+        )
 
     def protected_by(self, identifier: str) -> list[GridObject]:
         """The target's protection zone, nearest first, the target excluded.
@@ -269,9 +360,12 @@ class Network:
                 "name one of its feeders, or the breaker at its head"
             )
         if isinstance(target, Feeder):
-            if target.head is None:
-                return []
-            feeder, target = target, self.get(target.head)
+            if target.head is None or target.head not in self.objects:
+                raise GridQLError(
+                    f"feeder '{target.mrid}' has no head device, so it has no zone of its "
+                    "own; record its head, or name the breaker or recloser that protects it"
+                )
+            feeder, target = target, self.objects[target.head]
             if not getattr(target, "PROTECTIVE", False):
                 raise GridQLError(
                     f"feeder '{feeder.mrid}' starts at {target.TYPE} '{target.mrid}', which "
@@ -284,12 +378,26 @@ class Network:
                 "so it has no protection zone; PROTECTED BY takes a breaker, recloser, "
                 "fuse or sectionalizer, and SELECT protected_by shows which one covers it"
             )
+        self._require_tree(target, "PROTECTED BY")
         return self._resolve(self.topology().zone(target.mrid))
 
     def is_energized(self, mrid: str) -> Any:
+        """True, False, or MISSING when the model cannot tell.
+
+        A feeder is energised when its head is live *and closed*: a tripped
+        feeder breaker is live on its source side, but the feeder is out.
+        """
         obj = self.objects.get(mrid)
         if isinstance(obj, Feeder):
-            return MISSING if obj.head is None else self.topology().energized(obj.head)
+            head = self.objects.get(obj.head) if obj.head else None
+            if head is None:
+                return MISSING
+            live = self.topology().energized(head.mrid)
+            if live is not True or not isinstance(head, Switch):
+                return live
+            if head.state not in VALID_STATES:
+                return MISSING
+            return not head.is_open
         if isinstance(obj, Substation):
             return MISSING
         return self.topology().energized(mrid)
@@ -305,13 +413,14 @@ class Network:
         Returns a note per feeder it had to think about.
         """
         notes: list[str] = []
+        # Read before any head is set: setting one changes the model, and
+        # would rebuild the index once per feeder.
+        members = {feeder.mrid: self.members(feeder.mrid) for feeder in self.feeders}
         for feeder in self.feeders:
             if feeder.head is not None:
                 continue
             breakers = [
-                device.mrid
-                for device in self.devices
-                if device.feeder == feeder.mrid and isinstance(device, Breaker)
+                device.mrid for device in members[feeder.mrid] if isinstance(device, Breaker)
             ]
             if len(breakers) == 1:
                 feeder.head = breakers[0]
@@ -322,13 +431,19 @@ class Network:
             else:
                 notes.append(
                     f"{feeder.mrid}: no head recorded and none could be inferred, so "
-                    "DOWNSTREAM OF / UPSTREAM OF will return nothing for it; "
-                    "set feeder.head to fix"
+                    "topology queries on it are refused and its equipment's energized "
+                    "is unknown; set feeder.head to fix"
                 )
         return notes
 
     def _resolve(self, mrids: Iterable[str]) -> list[GridObject]:
         return [self.objects[m] for m in mrids if m in self.objects]
+
+
+def _described(obj: GridObject) -> str:
+    """An object as an ambiguity message lists it: mRID, type, and feeder."""
+    feeder = getattr(obj, "feeder", None)
+    return f"{obj.mrid} ({obj.TYPE}{f' on {feeder}' if feeder else ''})"
 
 
 class _Topology:
@@ -367,6 +482,8 @@ class _Topology:
         #: Device -> the nearest protective device above it on its feeder.
         self.protector: dict[str, str] = {}
         self._energized: set[str] = set()
+        #: Devices whose energisation the model cannot establish.
+        self._unknown: set[str] = set()
         self._build(network)
 
     def _build(self, network: Network) -> None:
@@ -503,21 +620,54 @@ class _Topology:
 
         An open device is itself still energised -- it has source-side
         potential -- but nothing beyond it is.
+
+        Two things leave the answer unknown rather than false, because the
+        model cannot say: a switch whose state is neither OPEN nor CLOSED
+        (whatever is beyond it may or may not be live), and equipment on a
+        feeder with no head (its source is not recorded). Unknown spreads
+        the way energy would, stopping at open switches, and never covers
+        equipment a known source already reaches.
         """
+        feeders = sorted(network.feeders, key=lambda f: f.mrid)
         queue = deque(
-            feeder.head
-            for feeder in sorted(network.feeders, key=lambda f: f.mrid)
-            if feeder.head and feeder.head in network.objects
+            feeder.head for feeder in feeders if feeder.head and feeder.head in network.objects
         )
+        #: Switches with an unreadable state that the flood reached.
+        blocked: list[str] = []
         while queue:
             current = queue.popleft()
             if current in self._energized:
                 continue
             self._energized.add(current)
             obj = network.objects.get(current)
+            if isinstance(obj, Switch):
+                if obj.state not in VALID_STATES:
+                    blocked.append(current)
+                    continue
+                if obj.is_open:
+                    continue
+            queue.extend(sorted(network.neighbors(current)))
+
+        sourced = {
+            feeder.mrid for feeder in feeders if feeder.head and feeder.head in network.objects
+        }
+        unknown = deque(
+            neighbor for mrid in blocked for neighbor in sorted(network.neighbors(mrid))
+        )
+        unknown.extend(
+            device.mrid
+            for device in network.devices
+            if device.feeder is not None and device.feeder not in sourced
+        )
+        while unknown:
+            current = unknown.popleft()
+            if current in self._energized or current in self._unknown:
+                continue
+            self._unknown.add(current)
+            obj = network.objects.get(current)
             if isinstance(obj, Switch) and obj.is_open:
                 continue
-            queue.extend(sorted(network.neighbors(current)))
+            unknown.extend(sorted(network.neighbors(current)))
 
     def descendants(self, mrid: str) -> list[str]:
         """Everything below ``mrid``, nearest first.
@@ -557,5 +707,10 @@ class _Topology:
             current = self.parent.get(current)
         return chain
 
-    def energized(self, mrid: str) -> bool:
-        return mrid in self._energized
+    def energized(self, mrid: str) -> Any:
+        """True, False, or MISSING when the model cannot tell."""
+        if mrid in self._energized:
+            return True
+        if mrid in self._unknown:
+            return MISSING
+        return False

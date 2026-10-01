@@ -51,7 +51,7 @@ CONFIG_NAME = "project.gridqlconfig"
 
 #: Keys the file may set. Anything else is a mistake worth reporting, since
 #: a silently ignored key looks exactly like a setting that does not work.
-KEYS = ("name", "db", "csv", "mapping", "queries", "params", "postgres")
+KEYS = ("name", "db", "csv", "mapping", "queries", "params", "postgres", "encoding")
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,8 @@ class Config:
     #: The database ``gridql import-postgres`` reads: a connection string.
     #: Queried live when the project names no ``db`` or ``csv`` to prefer.
     postgres: str | None = None
+    #: The text encoding of the project's CSV files, when it is not UTF-8.
+    encoding: str | None = None
 
     def __bool__(self) -> bool:
         return self.path is not None
@@ -111,6 +113,8 @@ class Config:
                 )
         if self.mapping:
             lines.append(f"mapping: {_readable(self.mapping)}")
+        if self.encoding:
+            lines.append(f"encoding: {self.encoding}")
         if self.queries:
             lines.append(f"queries: {_readable(self.queries)}")
         for key, value in sorted(self.params.items()):
@@ -178,7 +182,7 @@ def load_config(path: str | Path) -> Config:
         # Relative to the config, so the project works from any subdirectory.
         return str(root / value)
 
-    for key in ("name", "postgres"):
+    for key in ("name", "postgres", "encoding"):
         if data.get(key) is not None and not isinstance(data[key], str):
             raise GridQLError(f"{path}: {key} must be a string")
 
@@ -191,6 +195,7 @@ def load_config(path: str | Path) -> Config:
         dict(params),
         _path("mapping"),
         data.get("postgres"),
+        data.get("encoding"),
     )
 
 

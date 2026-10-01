@@ -34,6 +34,7 @@ files can be called anything.
 
 from __future__ import annotations
 
+import codecs
 import csv
 import re
 from dataclasses import dataclass, field
@@ -94,6 +95,8 @@ NODE_COLUMNS = ("from_node", "to_node")
 
 _BOOL_TRUE = frozenset({"true", "t", "yes", "y", "1"})
 _BOOL_FALSE = frozenset({"false", "f", "no", "n", "0"})
+#: The cells an unmapped column holds that read as booleans: words, not letters.
+_BOOLEAN_WORDS = {"true": True, "yes": True, "false": False, "no": False}
 _INTEGER = re.compile(r"-?(0|[1-9]\d*)$")
 _DECIMAL = re.compile(r"-?(0|[1-9]\d*)?\.\d+$")
 
@@ -113,6 +116,10 @@ class CsvReport:
     nodes: int = 0
     problems: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    #: The notes a query should mention, not only an import: places where
+    #: the reading involved a choice -- a column set aside, a code with no
+    #: translation, a feeder head inferred. Each is also in ``notes``.
+    cautions: list[str] = field(default_factory=list)
 
     def problem(self, source: str, line: int | str, message: str) -> None:
         # A file's rows are numbered; a table's are named by their key.
@@ -160,14 +167,22 @@ class _Row:
 
 
 def load_csv(
-    source: str | Path, mapping: str | Path | Mapping | None = None, **overrides: str | Path
+    source: str | Path,
+    mapping: str | Path | Mapping | None = None,
+    *,
+    encoding: str | None = None,
+    **overrides: str | Path,
 ) -> Network:
     """Read a network from CSV files."""
-    return read_csv(source, mapping, **overrides).network
+    return read_csv(source, mapping, encoding=encoding, **overrides).network
 
 
 def read_csv(
-    source: str | Path, mapping: str | Path | Mapping | None = None, **overrides: str | Path
+    source: str | Path,
+    mapping: str | Path | Mapping | None = None,
+    *,
+    encoding: str | None = None,
+    **overrides: str | Path,
 ) -> CsvDocument:
     """Read CSV files, returning the network and a report on what was found.
 
@@ -178,14 +193,18 @@ def read_csv(
     With a ``mapping`` (a path, or a loaded :class:`Mapping`), ``source`` is
     the directory holding the files the mapping names, and their columns
     mean what the mapping says rather than what their headers suggest.
+
+    Files are read as UTF-8 unless ``encoding`` names another, such as
+    ``cp1252`` for an export from a Windows tool.
     """
+    encoding = _check_encoding(encoding)
     report = CsvReport()
     if mapping is None:
-        tables = _conventional_tables(source, overrides)
+        tables = _conventional_tables(source, overrides, report, encoding)
     else:
         if overrides:
             raise CsvError("a mapping names its own files; set file = ... in the mapping instead")
-        tables = _mapped_tables(source, mapping, report)
+        tables = _mapped_tables(source, mapping, report, encoding)
     return assemble(tables, str(source), report)
 
 
@@ -226,7 +245,14 @@ def assemble(tables: dict[str, Iterable[_Row]], source: str, report: CsvReport) 
         else:
             report.notes.append(f"{mrid}: recorded head '{head}' is not in the device file")
 
-    report.notes.extend(network.infer_heads())
+    headless = {feeder.mrid for feeder in network.feeders if feeder.head is None}
+    notes = network.infer_heads()
+    report.notes.extend(notes)
+    report.cautions.extend(
+        note for note in notes
+        if any(note.startswith(f"{mrid}:") for mrid in headless
+               if network.objects[mrid].head is not None)
+    )
     report.devices = len(network.devices)
     report.feeders = len(network.feeders)
     report.substations = len(network.substations)
@@ -259,11 +285,16 @@ def _resolve_paths(source: str | Path, overrides: dict) -> dict[str, Path]:
     return paths
 
 
-def _conventional_tables(source: str | Path, overrides: dict) -> dict[str, Iterator[_Row]]:
+def _conventional_tables(
+    source: str | Path,
+    overrides: dict,
+    report: CsvReport | None = None,
+    encoding: str = "utf-8-sig",
+) -> dict[str, Iterator[_Row]]:
     paths = _resolve_paths(source, overrides)
     if not paths["devices"].exists():
         raise CsvError(f"no device file at {paths['devices']}")
-    return {kind: _rows(path) for kind, path in (
+    return {kind: _rows(path, report, encoding) for kind, path in (
         ("substations", paths["substations"]),
         ("feeders", paths["feeders"]),
         ("devices", paths["devices"]),
@@ -271,21 +302,87 @@ def _conventional_tables(source: str | Path, overrides: dict) -> dict[str, Itera
     )}
 
 
-def _rows(path: Path) -> Iterator[_Row]:
-    """Each row keyed by canonical attribute name, guessed from the header."""
-    header, records = _table(path)
-    columns = [_canonical(name) for name in header]
+def _rows(
+    path: Path, report: CsvReport | None = None, encoding: str = "utf-8-sig"
+) -> Iterator[_Row]:
+    """Each row keyed by canonical attribute name, guessed from the header.
+
+    Several spellings mean one field, so a file can carry two of them --
+    POSITION and STATUS, NAME and DESCRIPTION. Taking whichever cell
+    happens to be filled would mix two meanings row by row. A header that
+    is the field's own name settles it, and the others are kept as
+    attributes under their own names; with no such header there is no
+    telling which is meant, so the file is refused.
+    """
+    header, records = _table(path, encoding)
+    columns, kept = _resolve_header(header, path.name, report)
     for line, values in records:
         row = {
             column: value.strip()
             for column, value in zip(columns, values)
             if column and value.strip()
         }
-        yield _Row(row, line, path.name)
+        extras = {
+            kept[index]: _scalar(value.strip())
+            for index, value in enumerate(values)
+            if index in kept and value.strip()
+        }
+        yield _Row(row, line, path.name, extras if kept else None)
+
+
+def _resolve_header(
+    header: list[str], source: str, report: CsvReport | None
+) -> tuple[list[str | None], dict[int, str]]:
+    """The field each column fills, and the columns kept as attributes instead.
+
+    Returns the canonical name per column (None for one set aside) and, by
+    column index, the attribute name of each set-aside column.
+    """
+    columns: list[str | None] = [_canonical(name) for name in header]
+    claims: dict[str, list[int]] = {}
+    for index, column in enumerate(columns):
+        if column:
+            claims.setdefault(column, []).append(index)
+
+    kept: dict[int, str] = {}
+    for field_name, indexes in claims.items():
+        if len(indexes) < 2:
+            continue
+        written = [header[index] for index in indexes]
+        exact = [i for i in indexes if _plain(header[i]) == field_name]
+        if len(exact) != 1:
+            raise CsvError(
+                f"{source}: the columns {', '.join(written)} all mean {field_name}, and "
+                "none is named that, so there is no telling which to use; rename the one "
+                f"you mean to '{field_name}', or describe the file with a mapping (--mapping)"
+            )
+        winner = exact[0]
+        for index in indexes:
+            if index != winner:
+                columns[index] = None
+                kept[index] = _plain(header[index])
+        if report is not None:
+            others = ", ".join(header[i] for i in indexes if i != winner)
+            report.notes.append(
+                f"{source}: {header[winner]} is read as {field_name}; {others} "
+                f"{'means' if len(indexes) == 2 else 'mean'} the same field, so "
+                f"{'it is' if len(indexes) == 2 else 'they are'} kept as "
+                f"{'an attribute' if len(indexes) == 2 else 'attributes'} instead"
+            )
+            report.cautions.append(report.notes[-1])
+    return columns, kept
+
+
+def _plain(header: str) -> str:
+    """A header as a lowercase name, before any alias is applied."""
+    return header.strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def _mapped_tables(
-    source: str | Path, mapping: str | Path | Mapping, report: CsvReport
+    source: str | Path,
+    mapping: str | Path | Mapping,
+    report: CsvReport,
+    encoding: str = "utf-8-sig",
 ) -> dict[str, Iterator[_Row]]:
     directory = Path(source)
     if not directory.is_dir():
@@ -310,13 +407,17 @@ def _mapped_tables(
         where = f" (from {mapping.path})" if mapping.path else ""
         raise CsvError(f"{directory} has no {', '.join(missing)}, which the mapping{where} names")
 
-    return {kind: _mapped_rows(directory, mapping.of(kind), report) for kind in TARGETS}
+    return {
+        kind: _mapped_rows(directory, mapping.of(kind), report, encoding) for kind in TARGETS
+    }
 
 
-def _mapped_rows(directory: Path, sections, report: CsvReport) -> Iterator[_Row]:
+def _mapped_rows(
+    directory: Path, sections, report: CsvReport, encoding: str = "utf-8-sig"
+) -> Iterator[_Row]:
     """Each row of each file a mapping names, translated by that mapping."""
     for section in sections:
-        header, records = _table(directory / section.source)
+        header, records = _table(directory / section.source, encoding)
         if not header:
             report.notes.append(f"{section.source}: empty file")
             continue
@@ -328,9 +429,12 @@ def _mapped_rows(directory: Path, sections, report: CsvReport) -> Iterator[_Row]
                 fields, line, section.source, {key: _scalar(text) for key, text in extras.items()}
             )
         report.notes.extend(bound.notes())
+        report.cautions.extend(bound.cautions())
 
 
-def _table(path: Path) -> tuple[list[str], Iterator[tuple[int, list[str]]]]:
+def _table(
+    path: Path, encoding: str = "utf-8-sig"
+) -> tuple[list[str], Iterator[tuple[int, list[str]]]]:
     """A file's header, and its non-blank rows with their line numbers.
 
     A missing or empty file is an empty table: the conventional files other
@@ -338,25 +442,72 @@ def _table(path: Path) -> tuple[list[str], Iterator[tuple[int, list[str]]]]:
     """
     if not path.exists():
         return [], iter(())
-    handle = path.open(newline="", encoding="utf-8-sig")
-    reader = csv.reader(handle)
+    # The header is read on its own, so a header that is refused, or a
+    # mapping that does not fit it, leaves no file open behind it.
     try:
-        header = next(reader)
-    except StopIteration:
-        handle.close()
+        with path.open(newline="", encoding=encoding) as handle:
+            header = next(csv.reader(handle), None)
+    except UnicodeDecodeError:
+        raise _undecodable(path, encoding) from None
+    if header is None:
         return [], iter(())
 
     def records() -> Iterator[tuple[int, list[str]]]:
-        with handle:
-            for line, values in enumerate(reader, start=2):
-                if any(value.strip() for value in values):
-                    yield line, values
+        with path.open(newline="", encoding=encoding) as handle:
+            reader = csv.reader(handle)
+            next(reader, None)
+            try:
+                for line, values in enumerate(reader, start=2):
+                    if any(value.strip() for value in values):
+                        yield line, values
+            except UnicodeDecodeError:
+                raise _undecodable(path, encoding) from None
 
     return header, records()
 
 
+def _check_encoding(encoding: str | None) -> str:
+    """The codec to read with: UTF-8 (a byte-order mark allowed) unless named."""
+    if encoding is None:
+        return "utf-8-sig"
+    try:
+        codecs.lookup(encoding)
+    except LookupError:
+        raise CsvError(f"unknown encoding '{encoding}'; try utf-8, cp1252 or latin-1") from None
+    return encoding
+
+
+def _undecodable(path: Path, encoding: str) -> CsvError:
+    """Say which line of a file is not in the encoding it was read with."""
+    line = next(
+        (
+            number
+            for number, raw in enumerate(path.read_bytes().split(b"\n"), start=1)
+            if not _decodes(raw, encoding)
+        ),
+        None,
+    )
+    where = f"{path}:{line}" if line else str(path)
+    named = "UTF-8" if encoding == "utf-8-sig" else encoding
+    hint = (
+        "an export from Excel or another Windows tool is often cp1252: pass --encoding cp1252, "
+        'or set encoding = "cp1252" in the project config'
+        if encoding == "utf-8-sig"
+        else "name the encoding the file was written in"
+    )
+    return CsvError(f"{where}: not {named} text; {hint}")
+
+
+def _decodes(raw: bytes, encoding: str) -> bool:
+    try:
+        raw.decode(encoding)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
 def _canonical(header: str) -> str:
-    key = header.strip().lower().replace(" ", "_").replace("-", "_")
+    key = _plain(header)
     return ALIASES.get(key, key)
 
 
@@ -593,18 +744,15 @@ def _scalar(text: str) -> Any:
     """Read a bare cell as a number or boolean where that is unambiguous.
 
     A leading zero means the value is an identifier rather than a number, so
-    "00123" stays text.
+    "00123" stays text. Only whole words read as booleans: a single letter
+    is too often a code -- a T-link fuse, phase N, a Y-connected bank -- to
+    be read as true or false.
     """
     if _INTEGER.fullmatch(text):
         return int(text)
     if _DECIMAL.fullmatch(text):
         return float(text)
-    lowered = text.lower()
-    if lowered in _BOOL_TRUE and lowered not in ("1",):
-        return True
-    if lowered in _BOOL_FALSE and lowered not in ("0",):
-        return False
-    return text
+    return _BOOLEAN_WORDS.get(text.lower(), text)
 
 
 # -- writing ------------------------------------------------------------

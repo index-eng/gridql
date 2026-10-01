@@ -63,9 +63,11 @@ _HELP = """Queries look like:
   FIND devices DOWNSTREAM OF "REC-001"
   FIND transformers DOWNSTREAM OF "FDR-104" SELECT name, mRID, kva RETURN table
 
-Clauses:    FIND <type>, topology, WHERE, SELECT, RETURN -- in that order
+Clauses:    FIND <type>, topology, WHERE, SELECT, GROUP BY, ORDER BY, LIMIT, RETURN
+            -- in that order
 Topology:   DOWNSTREAM OF / UPSTREAM OF / CONNECTED TO / FED BY / PROTECTED BY
-Filters:    = != > >= < <= IN (...) CONTAINS LIKE, combined with AND / OR / NOT
+Filters:    = != > >= < <= IN (...) CONTAINS LIKE, combined with AND / OR / NOT;
+            a missing value matches no comparison -- test for one with IS MISSING
 Units:      13.8kV, 500kVA, 0.5MVA -- bare numbers use the attribute's own unit
 
 Save a query as a .gridql file and run it with:  gridql run queries/foo.gridql
@@ -196,6 +198,7 @@ RUN_OPTIONS = {
     "--live": False,
     "--config": True,
     "--mapping": True,
+    "--encoding": True,
     "--param": True,
     "--color": True,
     "--explain": False,
@@ -329,6 +332,13 @@ def _add_mapping_argument(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="a TOML file saying what the CSV files' columns, or the database's tables, mean",
     )
+    parser.add_argument(
+        "--encoding",
+        metavar="NAME",
+        default=None,
+        help="the text encoding of the CSV files, such as cp1252 (default: UTF-8, or the "
+        "project's encoding)",
+    )
 
 
 def _add_config_arguments(parser: argparse.ArgumentParser) -> None:
@@ -352,6 +362,9 @@ def network_for(
     mapping: str | None = None,
     postgres: str | None = None,
     live: bool = False,
+    announce: bool = True,
+    banner: bool = False,
+    encoding: str | None = None,
 ) -> Network:
     """The network a command runs against: a database, CSV files, or the sample.
 
@@ -364,6 +377,11 @@ def network_for(
     time; ``live`` does so for the database the project names, passing over
     the snapshot it keeps in ``db``. A project naming only a Postgres
     database is read live by default.
+
+    ``announce`` says on stderr what is known to be wrong with the data,
+    and when the bundled sample is answering; 'gridql validate' turns it
+    off, since saying so is its whole job. ``banner`` is for the REPL,
+    whose banner already names the sample.
     """
     for option, value in (
         ("--csv", csv), ("--db", db), ("--postgres", postgres), ("--mapping", mapping)
@@ -408,23 +426,57 @@ def network_for(
             )
         document = read_postgres(postgres, mapping)
         _warn_about_load(document, document.network.source, f"{command} --mapping {shlex.quote(mapping)}")
+        if announce:
+            _warn_about_model(
+                document.network,
+                document.report.cautions,
+                document.network.source,
+                f"gridql validate --postgres {shlex.quote(redact(postgres))} "
+                f"--mapping {shlex.quote(mapping)}",
+                f"{command} --mapping {shlex.quote(mapping)}",
+            )
         return document.network
     if csv:
         mapping = mapping or config.mapping
-        document = read_csv(csv, mapping)
+        encoding = encoding or config.encoding
+        document = read_csv(csv, mapping, encoding=encoding)
+        given = (
+            f"--csv {shlex.quote(csv)}"
+            + (f" --mapping {shlex.quote(mapping)}" if mapping else "")
+            + (f" --encoding {shlex.quote(encoding)}" if encoding else "")
+        )
         _warn_about_load(
             document,
             csv,
             f"gridql import-csv {shlex.quote(csv)}"
             + (f" --mapping {shlex.quote(mapping)}" if mapping else ""),
         )
+        if announce:
+            _warn_about_model(
+                document.network,
+                document.report.cautions,
+                csv,
+                f"gridql validate {given}",
+                f"gridql import-csv {given[len('--csv '):]}",
+            )
         return document.network
     if db:
-        return load_network(db)
+        network = load_network(db)
+        if announce:
+            _warn_about_model(network, [], db, f"gridql validate --db {shlex.quote(db)}")
+        return network
     network = build_sample_network()
     # Said where the network is named, so an error about what it lacks
     # explains why this data and not the user's own.
     network.source += ", used because no --db, --csv or project dataset was given"
+    if announce and not banner:
+        # Plausible answers from a demo feeder, with exit 0, are what a job
+        # run from the wrong directory would otherwise get.
+        _say(
+            "warning",
+            "answering from the bundled sample network FDR-104, because no --db, --csv, "
+            f"--postgres or {CONFIG_NAME} names your data",
+        )
     return network
 
 
@@ -478,6 +530,46 @@ def _warn_about_load(document, source: str, command: str) -> None:
         headline += f", starting with {report.problems[0]}"
     _say("warning", headline)
     print(f"  run '{command}' for the full report", file=sys.stderr)
+
+
+def _warn_about_model(
+    network: Network,
+    cautions: list[str],
+    source: str,
+    validate_command: str,
+    import_command: str | None = None,
+) -> None:
+    """Say on stderr what is known to be wrong with the data, before answering.
+
+    Validation and the loader's choices -- a column set aside, a code with
+    no translation, an inferred feeder head -- are otherwise only seen by
+    someone who runs ``validate`` or an import, while a query's answer looks
+    the same whether they hold or not.
+    """
+    report = validate(network)
+    if report:
+        counts = []
+        if report.errors:
+            counts.append(f"{len(report.errors)} error{'s' if len(report.errors) != 1 else ''}")
+        if report.warnings:
+            counts.append(
+                f"{len(report.warnings)} warning{'s' if len(report.warnings) != 1 else ''}"
+            )
+        first = (report.errors + report.warnings)[0]
+        _say(
+            "warning",
+            f"{source} has {' and '.join(counts)} from validation, "
+            f"starting with {first.code}: {first.message}",
+        )
+        print(f"  run '{validate_command}' for the full report", file=sys.stderr)
+    if cautions:
+        _say(
+            "warning",
+            f"reading {source} involved {len(cautions)} choice{'s' if len(cautions) != 1 else ''}"
+            f" worth checking, starting with {cautions[0]}",
+        )
+        if import_command:
+            print(f"  run '{import_command}' to see them all", file=sys.stderr)
 
 
 def source_of(db: str | None, csv: str | None, config: Config | None = None) -> str:
@@ -718,9 +810,14 @@ def import_csv(
     mapping: str | None = None,
     config: Config | None = None,
     skip_checks: bool = False,
+    encoding: str | None = None,
 ) -> str:
     """Read CSV files and report what they held -- the way to try out a mapping."""
-    document = read_csv(path, mapping or (config.mapping if config else None))
+    document = read_csv(
+        path,
+        mapping or (config.mapping if config else None),
+        encoding=encoding or (config.encoding if config else None),
+    )
     lines = [document.report.summary()]
 
     report = validate(document.network)
@@ -758,8 +855,9 @@ def export_csv(
     mapping: str | None = None,
     postgres: str | None = None,
     live: bool = False,
+    encoding: str | None = None,
 ) -> str:
-    network = network_for(db, csv, config, mapping, postgres, live)
+    network = network_for(db, csv, config, mapping, postgres, live, encoding=encoding)
     written = write_csv(network, path)
     return f"wrote {', '.join(p.name for p in written)} to {path}"
 
@@ -846,10 +944,15 @@ def run_validate(
     mapping: str | None = None,
     postgres: str | None = None,
     live: bool = False,
+    encoding: str | None = None,
 ) -> int:
     """Print a validation report. Exit non-zero when the model is unsound."""
     try:
-        report = validate(network_for(db, csv, config, mapping, postgres, live))
+        report = validate(
+            network_for(
+                db, csv, config, mapping, postgres, live, announce=False, encoding=encoding
+            )
+        )
     except GridQLError as error:
         _say("error", error)
         return 1
@@ -867,8 +970,9 @@ def export_cim(
     mapping: str | None = None,
     postgres: str | None = None,
     live: bool = False,
+    encoding: str | None = None,
 ) -> str:
-    network = network_for(db, csv, config, mapping, postgres, live)
+    network = network_for(db, csv, config, mapping, postgres, live, encoding=encoding)
     objects = None if query is None else evaluate(network, parse(query)).objects
 
     if path == "-":
@@ -1199,7 +1303,14 @@ def main(argv: list[str] | None = None) -> int:
             _say("error", error)
             return 1
         return run_validate(
-            args.db, args.strict, args.csv, config, args.mapping, args.postgres, args.live
+            args.db,
+            args.strict,
+            args.csv,
+            config,
+            args.mapping,
+            args.postgres,
+            args.live,
+            args.encoding,
         )
 
     if argv and argv[0] == "import-csv":
@@ -1207,7 +1318,13 @@ def main(argv: list[str] | None = None) -> int:
         _use_color(args.color)
         return _emit(
             lambda: import_csv(
-                args.path, args.db, args.force, args.mapping, _config(args), args.skip_checks
+                args.path,
+                args.db,
+                args.force,
+                args.mapping,
+                _config(args),
+                args.skip_checks,
+                args.encoding,
             )
         )
 
@@ -1231,7 +1348,14 @@ def main(argv: list[str] | None = None) -> int:
         _use_color(args.color)
         return _emit(
             lambda: export_csv(
-                args.path, args.db, args.csv, _config(args), args.mapping, args.postgres, args.live
+                args.path,
+                args.db,
+                args.csv,
+                _config(args),
+                args.mapping,
+                args.postgres,
+                args.live,
+                args.encoding,
             )
         )
 
@@ -1248,6 +1372,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.mapping,
                 args.postgres,
                 args.live,
+                args.encoding,
             )
         )
 
@@ -1267,7 +1392,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = _config(args)
-        network = _network(args, config)
+        network = _network(args, config, banner=args.query is None)
     except GridQLError as error:
         _say("error", error)
         return 1
@@ -1277,7 +1402,11 @@ def main(argv: list[str] | None = None) -> int:
             network.source if args.postgres or args.live else source_of(args.db, args.csv, config)
         )
         return repl(
-            network, args.format, source, config, reload=lambda: _network(args, config)
+            network,
+            args.format,
+            source,
+            config,
+            reload=lambda: _network(args, config, banner=True),
         )
 
     return _emit(lambda: run_query(network, args.query, args.format, args.explain, _stdout()))
@@ -1287,8 +1416,17 @@ def _config(args: argparse.Namespace) -> Config:
     return project_config(args.config, not args.no_config)
 
 
-def _network(args: argparse.Namespace, config: Config) -> Network:
-    return network_for(args.db, args.csv, config, args.mapping, args.postgres, args.live)
+def _network(args: argparse.Namespace, config: Config, banner: bool = False) -> Network:
+    return network_for(
+        args.db,
+        args.csv,
+        config,
+        args.mapping,
+        args.postgres,
+        args.live,
+        banner=banner,
+        encoding=args.encoding,
+    )
 
 
 def _run(argv: list[str]) -> str:

@@ -83,7 +83,7 @@ def import_network(source: str | Path) -> Network:
 
 def read_cim(source: str | Path) -> CimDocument:
     """Read a CIM file, returning the network and a report on what was found."""
-    document = _parse(_read_text(source))
+    document = _parse(_read_bytes(source))
     document.network.source = str(source)
     return document
 
@@ -93,10 +93,11 @@ def loads_cim(text: str) -> CimDocument:
     return _parse(text)
 
 
-def _read_text(source: str | Path) -> str:
+def _read_bytes(source: str | Path) -> bytes:
+    """The file as bytes, so the XML declaration decides how it is decoded."""
     path = Path(source)
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_bytes()
     except OSError as error:
         raise CimImportError(f"cannot read {path}: {error.strerror or error}") from error
 
@@ -121,8 +122,17 @@ class _Record:
         return self.references.get(f"{namespace}{name}")
 
 
-def _parse(text: str) -> CimDocument:
-    if "<!DOCTYPE" in text:
+#: How a DOCTYPE declaration is spelled in bytes, in each encoding XML allows
+#: without a declaration of its own saying so.
+_DOCTYPES = tuple("<!DOCTYPE".encode(codec) for codec in ("utf-8", "utf-16-le", "utf-16-be"))
+
+
+def _parse(text: str | bytes) -> CimDocument:
+    if isinstance(text, str):
+        refused = "<!DOCTYPE" in text
+    else:
+        refused = any(spelling in text for spelling in _DOCTYPES)
+    if refused:
         # Entity declarations are an attack surface and CIM has no use for them.
         raise CimImportError("refusing a document with a DOCTYPE declaration")
 
@@ -291,6 +301,10 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
         for record in grouped.get("Terminal", [])
     }
 
+    # Built once: rebuilding them per record made a large import quadratic.
+    feeder_ids = {feeder.mrid for feeder in network.feeders}
+    substation_ids = {substation.mrid for substation in network.substations}
+
     for record in records:
         cls = model_class_for(record.cim_class)
         if (
@@ -312,11 +326,11 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
             continue
 
         container = resolve(record.reference(CIM_NS, "Equipment.EquipmentContainer"))
-        feeder_mrid = container if container in {f.mrid for f in network.feeders} else None
+        feeder_mrid = container if container in feeder_ids else None
         substation_mrid = None
         if feeder_mrid is not None:
             substation_mrid = network.objects[feeder_mrid].substation
-        elif container in {s.mrid for s in network.substations}:
+        elif container in substation_ids:
             substation_mrid = container
 
         fields: dict[str, Any] = {
@@ -577,6 +591,8 @@ def _connect(network: Network, grouped: dict[str, list[_Record]], resolve, repor
 
 def _assign_heads(network: Network, heads: dict[str, str | None], report: ImportReport) -> None:
     """Restore each feeder's source device, inferring it when CIM did not say."""
+    # Read before any head is set, since each one changes the model.
+    members = {feeder.mrid: network.members(feeder.mrid) for feeder in network.feeders}
     for feeder in network.feeders:
         recorded = heads.get(feeder.mrid)
         if recorded and recorded in network.objects:
@@ -586,8 +602,8 @@ def _assign_heads(network: Network, heads: dict[str, str | None], report: Import
         # beats any guess from the equipment around it.
         sources = [
             device.mrid
-            for device in network.devices
-            if device.feeder == feeder.mrid and device.extras.get("cim_class") == "EnergySource"
+            for device in members[feeder.mrid]
+            if device.extras.get("cim_class") == "EnergySource"
         ]
         if len(sources) == 1:
             feeder.head = sources[0]

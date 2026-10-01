@@ -164,6 +164,22 @@ class Truthy(Node):
 
 
 @dataclass(frozen=True)
+class IsMissing(Node):
+    """``kva IS MISSING``: the attribute has no value, or the object lacks it.
+
+    The one test a missing value can pass. Every comparison with one is
+    unknown, so neither ``kva = 500`` nor ``NOT kva = 500`` matches it.
+    """
+
+    attribute: str
+    negated: bool = False
+    position: int = 0
+
+    def describe(self) -> str:
+        return f"{self.attribute} IS {'NOT ' if self.negated else ''}MISSING"
+
+
+@dataclass(frozen=True)
 class And(Node):
     left: Node
     right: Node

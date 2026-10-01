@@ -160,7 +160,8 @@ class CommandLineTests(unittest.TestCase):
 
     def test_a_syntax_error_colours_its_message_and_caret(self):
         _, _, err = self.run_cli(["--color", "always", "FIND switches WHERE"])
-        message, query, caret = err.rstrip("\n").split("\n")
+        # After the note that the bundled sample is answering.
+        message, query, caret = err.rstrip("\n").split("\n")[-3:]
         self.assertTrue(message.startswith("\033[1;31m"))
         self.assertEqual(query, "  FIND switches WHERE")
         self.assertTrue(caret.endswith("\033[1;31m^\033[0m"))

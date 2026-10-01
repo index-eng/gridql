@@ -124,10 +124,29 @@ class CacheInvalidationTests(unittest.TestCase):
         self.network.get("TIE-001").state = "CLOSED"
         self.assertIsNot(self.network.topology(), before)
 
-    def test_normal_state_does_not_disturb_the_cache(self):
-        # Only the present state feeds energisation; normal_state is reference data.
+    def test_normal_state_rebuilds_the_cache(self):
+        # A looped feeder's tree is broken at its normally open switch, so
+        # moving the open point moves the tree.
         before = self.network.topology()
         self.network.get("SW-001").normal_state = "OPEN"
+        self.assertIsNot(self.network.topology(), before)
+
+    def test_moving_a_device_to_another_feeder_rebuilds_the_cache(self):
+        self.network.add_feeder("FDR-OTHER")
+        self.assertIn("LOAD-001", self.network.topology().parent)
+        self.network.get("LOAD-001").feeder = "FDR-OTHER"
+        self.assertNotIn("LOAD-001", self.network.topology().parent)
+
+    def test_a_position_assigned_in_lower_case_is_read(self):
+        switch = self.network.get("REC-001")
+        switch.state = "open"
+        self.assertEqual(switch.state, "OPEN")
+        self.assertTrue(switch.is_open)
+        self.assertIs(self.network.is_energized("LOAD-001"), False)
+
+    def test_an_unrelated_assignment_leaves_the_cache_alone(self):
+        before = self.network.topology()
+        self.network.get("LOAD-001").kw = 999
         self.assertIs(self.network.topology(), before)
 
     def test_invalidate_is_available_for_changes_nothing_can_observe(self):

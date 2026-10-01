@@ -19,6 +19,8 @@ from ..units import parse_quantity
 
 CLOSED = "CLOSED"
 OPEN = "OPEN"
+#: The only positions GridQL can reason about. Anything else is unknown.
+VALID_STATES = frozenset({OPEN, CLOSED})
 
 
 class _Missing:
@@ -117,15 +119,22 @@ class Observable:
     those assignments announce themselves, so a cached answer cannot survive
     the change that invalidates it.
 
-    Only the classes that own such a field mix this in -- defining
-    ``__setattr__`` costs a little on every assignment, and most equipment
-    has nothing the topology depends on.
+    Equipment and feeders mix this in: every device's ``feeder`` decides
+    which tree it is in, a switch's positions decide where the trees break
+    and what is live, and a feeder's ``head`` is its root.
+
+    Positions are upper-cased as they are assigned, as they are when the
+    object is built, so ``switch.state = "open"`` opens it.
     """
 
     #: Fields whose value the derived topology is computed from.
     TOPOLOGY_FIELDS: frozenset[str] = frozenset()
+    #: Fields held in upper case, whatever case they are assigned in.
+    UPPERCASE_FIELDS: frozenset[str] = frozenset()
 
     def __setattr__(self, name: str, value: Any) -> None:
+        if name in self.UPPERCASE_FIELDS and isinstance(value, str):
+            value = value.upper()
         object.__setattr__(self, name, value)
         if name in self.TOPOLOGY_FIELDS:
             network = self._network
@@ -134,10 +143,12 @@ class Observable:
 
 
 @dataclass(repr=False)
-class Device(GridObject):
+class Device(Observable, GridObject):
     """Base conducting equipment."""
 
     TYPE = "device"
+    # Membership decides which feeder's tree a device is walked in.
+    TOPOLOGY_FIELDS = frozenset({"feeder"})
     CIM_CLASS = "ConductingEquipment"
     COLUMNS = ("mrid", "name", "type", "feeder", "phases", "voltage")
     #: Whether the device bounds a protection zone: it opens by itself to
@@ -160,13 +171,15 @@ class Device(GridObject):
 
 
 @dataclass(repr=False)
-class Switch(Observable, Device):
+class Switch(Device):
     """A load-break switch, and the base for every switching device."""
 
     TYPE = "switch"
     CIM_CLASS = "Switch"
-    # Opening or closing a switch changes what is energised downstream.
-    TOPOLOGY_FIELDS = frozenset({"state"})
+    # Opening or closing a switch changes what is energised downstream, and
+    # its normal position decides where a looped feeder's tree is broken.
+    TOPOLOGY_FIELDS = frozenset({"feeder", "state", "normal_state"})
+    UPPERCASE_FIELDS = frozenset({"state", "normal_state"})
     COLUMNS = ("mrid", "name", "type", "feeder", "phases", "voltage", "state", "normal_state")
 
     normal_state: str = CLOSED
@@ -279,6 +292,7 @@ class Load(Device):
 class Capacitor(Device):
     TYPE = "capacitor"
     CIM_CLASS = "LinearShuntCompensator"
+    UPPERCASE_FIELDS = frozenset({"state", "normal_state"})
     COLUMNS = ("mrid", "name", "type", "feeder", "phases", "voltage", "kvar", "state")
 
     kvar: float | None = None

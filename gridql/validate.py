@@ -26,11 +26,11 @@ from typing import Iterator
 
 from .color import PLAIN, Palette
 from .model import Device, Feeder, Network, Substation, Switch
+from .model.device import VALID_STATES
 
 ERROR = "error"
 WARNING = "warning"
 
-_VALID_STATES = frozenset({"OPEN", "CLOSED"})
 
 
 @dataclass(frozen=True)
@@ -103,8 +103,49 @@ def validate(network: Network) -> ValidationReport:
     _check_switch_states(network, report)
     _check_connections(network, report)
     _check_structure(network, report)
+    _check_magnitudes(network, report)
 
     return report
+
+
+#: Attribute -> (the largest value believable in its canonical unit, the
+#: unit mistake that usually produces a bigger one). A bare number is read
+#: in the canonical unit, so a voltage exported in volts arrives 1000 times
+#: too big and every comparison against it is wrong.
+_CEILINGS: dict[str, tuple[float, str]] = {
+    "voltage": (1000.0, "written in volts rather than kV"),
+    "primary_voltage": (1000.0, "written in volts rather than kV"),
+    "secondary_voltage": (1000.0, "written in volts rather than kV"),
+    "kva": (2_000_000.0, "written in VA rather than kVA"),
+    "kw": (2_000_000.0, "written in W rather than kW"),
+    "kvar": (2_000_000.0, "written in var rather than kvar"),
+    "length": (2_000_000.0, "not in feet"),
+}
+
+
+def _check_magnitudes(network: Network, report: ValidationReport) -> None:
+    """Values too large to be true, which usually means the wrong unit.
+
+    One finding per attribute, not per device: a whole export in the wrong
+    unit is one mistake to fix.
+    """
+    for attribute, (ceiling, cause) in _CEILINGS.items():
+        offenders = []
+        for obj in (*network.substations, *network.feeders, *network.devices):
+            value = getattr(obj, attribute, None)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if abs(value) > ceiling:
+                    offenders.append((obj.mrid, value))
+        if not offenders:
+            continue
+        first, value = offenders[0]
+        report.add(
+            WARNING, "implausible-value",
+            f"{attribute} is over {ceiling:,.0f} on {_describe([m for m, _ in offenders])} "
+            f"({first}: {value:,.0f}); probably {cause}. For CSV, write the unit in the cell "
+            "(12470V) or in the mapping (unit = \"V\")",
+            *(mrid for mrid, _ in offenders),
+        )
 
 
 # -- references ---------------------------------------------------------
@@ -158,14 +199,14 @@ def _describe(owners: list[str], limit: int = 3) -> str:
 
 def _check_feeder_heads(network: Network, report: ValidationReport) -> None:
     for feeder in network.feeders:
-        members = [d for d in network.devices if d.feeder == feeder.mrid]
+        members = network.members(feeder.mrid)
 
         if feeder.head is None:
             if members:
                 report.add(
                     WARNING, "headless-feeder",
-                    f"{feeder.mrid}: no head device, so DOWNSTREAM OF and UPSTREAM OF "
-                    f"return nothing for its {len(members)} devices",
+                    f"{feeder.mrid}: no head device, so topology queries on its "
+                    f"{len(members)} devices are refused and their energized is unknown",
                     feeder.mrid,
                 )
             else:
@@ -207,7 +248,7 @@ def _check_switch_states(network: Network, report: ValidationReport) -> None:
             continue
         for attribute in ("state", "normal_state"):
             value = getattr(device, attribute)
-            if value not in _VALID_STATES:
+            if value not in VALID_STATES:
                 report.add(
                     ERROR, "invalid-state",
                     f"{device.mrid}: {attribute} is '{value}', expected OPEN or CLOSED",

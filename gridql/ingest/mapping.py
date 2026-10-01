@@ -267,8 +267,12 @@ class BoundSection:
                 text = f"{text}{spec.unit}"
         return text
 
-    def notes(self) -> list[str]:
-        """What a person setting up the mapping should know about this file."""
+    def cautions(self) -> list[str]:
+        """Codes the mapping had no translation for, used as written.
+
+        Worth saying on every query, not only at import: a code read as
+        written can leave a switch in a state GridQL cannot read.
+        """
         name = self.section.label
         notes: list[str] = []
         for (target, text), count in sorted(self.untranslated.items()):
@@ -277,6 +281,12 @@ class BoundSection:
                 f"{name}: {spec.source} value '{text}' has no translation for {target} "
                 f"({count} row{'s' if count != 1 else ''}); used as written"
             )
+        return notes
+
+    def notes(self) -> list[str]:
+        """What a person setting up the mapping should know about this file."""
+        name = self.section.label
+        notes = self.cautions()
         if self.shadowed:
             notes.append(
                 f"{name}: not kept, because GridQL has an attribute of the same name "

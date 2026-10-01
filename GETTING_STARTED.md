@@ -250,7 +250,8 @@ FIND loads    WHERE NOT energized
 
 Operators are `=`, `!=`, `>`, `>=`, `<`, `<=`, `IN (...)`, `CONTAINS` and `LIKE`, combined with
 `AND`, `OR`, `NOT` and parentheses. String comparison is case-insensitive. `CONTAINS` finds text
-anywhere in a value; `LIKE` matches the whole value against a pattern, the way SQL's does.
+anywhere in a value; `LIKE` matches the whole value against a pattern, the way SQL's does. A
+missing value matches no comparison and no negation of one; `kva IS MISSING` finds it.
 
 Clause order is `FIND`, topology, `WHERE`, `SELECT`, `GROUP BY`, `ORDER BY`, `LIMIT`, `RETURN`; a
 clause out of place says which one and where.
@@ -425,8 +426,12 @@ A `devices.csv` is all that is strictly required; `connections.csv`, `feeders.cs
 `from_node` and `to_node` columns in `devices.csv` naming the nodes at each device's ends. Column
 names are matched loosely (`OBJECTID`, `Device Type`,
 `Circuit`, `kV` all work), cells may carry units (`12470 V`, `0.5MVA`), and any column GridQL does
-not recognise is kept as a queryable attribute rather than dropped. Bad rows are reported with
-their line number instead of stopping the load. A query still runs when that happens, but warns
+not recognise is kept as a queryable attribute rather than dropped. Two columns that mean the same
+field are not guessed between: one named for the field itself (`state`, `name`) is read and the
+other kept as an attribute, and without one the file is refused. Bad rows are reported with
+their line number instead of stopping the load. Files are read as UTF-8; an export from Excel
+or another Windows tool is often `cp1252`, which `--encoding cp1252` (or `encoding = "cp1252"`
+in the project file) reads. A query still runs when that happens, but warns
 first — so an empty answer caused by rows that never loaded does not look like a real one.
 
 [`examples/csv/`](examples/csv/) shows the shape: two feeders out of a small substation, 77

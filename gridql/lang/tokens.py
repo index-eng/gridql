@@ -44,6 +44,8 @@ KEYWORDS = frozenset(
         "IN",
         "CONTAINS",
         "LIKE",
+        "IS",
+        "MISSING",
         "DOWNSTREAM",
         "UPSTREAM",
         "CONNECTED",

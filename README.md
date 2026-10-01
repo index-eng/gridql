@@ -187,6 +187,14 @@ Unlike normal-topology traversal, this traversal can cross feeder boundaries thr
 That means closing a normally open tie can cause the neighbouring feeder to become energised from
 another source.
 
+Where the model cannot say, `energized` is unknown rather than false: equipment on a feeder with no
+head device, and anything beyond a switch whose state is neither `OPEN` nor `CLOSED`. An unknown
+value matches neither `WHERE energized` nor `WHERE NOT energized`; `WHERE energized IS MISSING`
+finds it.
+
+A feeder is energised when its head device is energised and closed, so a feeder whose breaker has
+tripped is not.
+
 ### 5. Feeder membership
 
 A device belongs to exactly one feeder, independently of whether that feeder is currently energising
@@ -229,6 +237,12 @@ The same principle runs through the rest of GridQL:
 
 - a query that names a device that does not exist, or an attribute the type cannot have, is an error
   rather than an empty result
+- a name shared by several objects is refused, listing them, rather than answered for the first
+- `DOWNSTREAM OF`, `UPSTREAM OF`, `FED BY` and `PROTECTED BY` are refused, with the reason, when
+  their target is on no feeder tree: its feeder has no head, it is on an island, or it is on no
+  feeder
+- energisation the model cannot establish is unknown, not false
+- a comparison with a missing value is unknown, so it matches neither the comparison nor its negation
 - `PROTECTED BY` a device that bounds no protection zone is refused, with the reason
 - a CSV row that cannot be read, or a connection to a device that does not exist, is reported with
   its file and line rather than silently dropped
@@ -557,6 +571,8 @@ Supported operators include:
 IN (...)
 CONTAINS
 LIKE
+IS MISSING
+IS NOT MISSING
 ```
 
 Logical operators:
@@ -598,7 +614,9 @@ FIND devices WHERE NOT energized
 ```
 
 A bare word on the right-hand side is interpreted as an attribute when the type has an attribute
-with that name; otherwise it is treated as a value.
+with that name; otherwise it is treated as a value. A bare word that is both a GridQL value (a type
+name, `OPEN`, `CLOSED`, a phasing) and a column in the loaded data is refused, since which reading
+wins would otherwise depend on the columns in the export; quote it to mean the value.
 
 Therefore:
 
@@ -622,7 +640,18 @@ FIND switches WHERE state = "OPEN"
 
 Attribute names that the type cannot have are errors rather than empty results.
 
-Missing attribute values do not match comparisons.
+Missing attribute values do not match comparisons, and neither do their negations: comparisons
+follow SQL's three-valued logic, so `kva != 500` and `NOT kva = 500` both leave out a transformer
+with no rating. Test for a missing value directly:
+
+``` text
+FIND transformers WHERE kva IS MISSING
+FIND transformers WHERE kva < 25 OR kva IS MISSING
+```
+
+A number is never ordered against text that is not one, so `nameplate >= 100` does not match
+`"25 kVA"` or `"UNKNOWN"`. A boolean compares only with another boolean or with `true`, `false`,
+`yes` or `no`.
 
 ------------------------------------------------------------------------
 
@@ -833,6 +862,7 @@ queries = "queries"
 
 # mapping = "gis-export.toml"
 # postgres = "service=gis"
+# encoding = "cp1252"        # CSV files written by a Windows tool
 
 [params]
 feeder = "FDR-104"
@@ -1000,6 +1030,7 @@ Examples include:
 - equipment without feeder membership
 - equipment without connections
 - hard links between feeders that are not represented as ties
+- values too large to be believable, such as a voltage written in volts where kV was meant
 
 Warnings cause a non-zero result only when `--strict` is used.
 
@@ -1172,7 +1203,10 @@ loaded 6 devices, 1 feeders, 0 substations, 4 connections
 ```
 
 A query against CSV reports the problem on stderr while keeping query output suitable for downstream
-use.
+use. So does any query whose data has validation findings, or whose reading involved a choice
+worth checking: a column set aside, a code the mapping has no translation for, a feeder head
+inferred. A query answered from the bundled sample network, because no dataset was named, says
+that too.
 
 This allows an engineer to inspect both:
 

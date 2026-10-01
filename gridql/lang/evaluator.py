@@ -20,13 +20,21 @@ from typing import Any, Iterator, Mapping
 from ..errors import GridQLError, GridQLNameError, UnitError
 from ..model import MISSING, Device, GridObject, Network
 from ..model.device import field_names
-from ..model.types import attribute_universe, canonical_unit, class_for, plural, resolve_type
+from ..model.types import (
+    TYPE_ALIASES,
+    attribute_universe,
+    canonical_unit,
+    class_for,
+    plural,
+    resolve_type,
+)
 from ..units import convert
 from .ast import (
     And,
     Compare,
     Contains,
     In,
+    IsMissing,
     Like,
     Literal,
     Name,
@@ -71,7 +79,7 @@ def _tested(node: Node | None) -> list[str]:
     stack = [node] if node is not None else []
     while stack:
         current = stack.pop()
-        if isinstance(current, (Compare, In, Contains, Like, Truthy)):
+        if isinstance(current, (Compare, In, Contains, Like, Truthy, IsMissing)):
             found.append(current.attribute)
         elif isinstance(current, (And, Or)):
             stack.extend((current.right, current.left))
@@ -86,7 +94,7 @@ def _referenced(node: Node | None) -> set[str]:
     stack = [node] if node is not None else []
     while stack:
         current = stack.pop()
-        if isinstance(current, (Compare, In, Contains, Like, Truthy)):
+        if isinstance(current, (Compare, In, Contains, Like, Truthy, IsMissing)):
             found.add(current.attribute.lower())
         if isinstance(current, (And, Or)):
             stack.extend((current.left, current.right))
@@ -274,7 +282,7 @@ def evaluate(network: Network, query: Query) -> Result:
 
     if query.where is not None:
         context = _Context(network, vocabulary.names, distances)
-        objects = [obj for obj in objects if _test(query.where, obj, context)]
+        objects = [obj for obj in objects if _test(query.where, obj, context) is True]
 
     if query.is_aggregate:
         rows = _aggregate(network, query, objects, select, distances)
@@ -414,6 +422,7 @@ def _projection(
     # exactly like a real empty answer.
     for attribute in _tested(query.where):
         vocabulary.check(attribute)
+    _refuse_ambiguous_words(query.where, vocabulary)
     for column in query.group_by or ():
         vocabulary.check(column)
     grouped = {column.lower() for column in query.group_by or ()}
@@ -458,6 +467,44 @@ def _projection(
                 )
 
     return select
+
+
+#: Bare words that are GridQL values: type names, switch positions, phasing.
+_VALUE_WORDS = frozenset(
+    {*TYPE_ALIASES, "open", "closed", "a", "b", "c", "n", "ab", "bc", "ac", "ca", "abc",
+     "s1", "s2", "s1s2"}
+)
+
+
+def _refuse_ambiguous_words(where: Node | None, vocabulary: _Vocabulary) -> None:
+    """Refuse a bare word that is both a utility's column and a GridQL value.
+
+    A bare word on the right is an attribute when the data has one by that
+    name, so ``type = transformer`` would compare against a ``transformer``
+    column -- which service-point exports usually carry -- and quietly match
+    nothing. Which reading wins would then depend on the columns in this
+    month's export, so neither is chosen.
+    """
+    own = attribute_universe(vocabulary.type_key)
+    stack = [where] if where is not None else []
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (And, Or)):
+            stack.extend((current.left, current.right))
+        elif isinstance(current, Not):
+            stack.append(current.operand)
+        elif isinstance(current, (Compare, Contains, Like)):
+            stack.append(current.operand)
+        elif isinstance(current, In):
+            stack.extend(current.operands)
+        elif isinstance(current, Name):
+            word = current.name.lower()
+            if word in _VALUE_WORDS and word in vocabulary.names and word not in own:
+                raise GridQLError(
+                    f"'{current.name}' is both a GridQL value and a column in "
+                    f"{vocabulary.source or 'this data'}, so it is unclear which is meant; "
+                    f"write \"{current.name}\" in quotes for the value"
+                )
 
 
 # -- aggregation --------------------------------------------------------
@@ -619,50 +666,82 @@ class _Context:
         return _value(self.network, obj, name, self.distances)
 
 
-def _test(node: Node, obj: GridObject, context: _Context) -> bool:
+def _absent(value: Any) -> bool:
+    """No value: the object lacks the attribute, or has it with nothing recorded."""
+    return value is MISSING or value is None
+
+
+def _test(node: Node, obj: GridObject, context: _Context) -> bool | None:
+    """Whether ``obj`` passes ``node``: True, False, or None for unknown.
+
+    Three-valued, as SQL is. A comparison with a missing value is unknown
+    rather than false, so that negating it is unknown too: ``kva != 500``
+    and ``NOT kva = 500`` then agree, and neither matches a transformer
+    with no rating. WHERE keeps only what is known to pass. ``IS MISSING``
+    is the test a missing value can pass.
+    """
     if isinstance(node, And):
-        return _test(node.left, obj, context) and _test(node.right, obj, context)
+        left = _test(node.left, obj, context)
+        if left is False:
+            return False
+        right = _test(node.right, obj, context)
+        if right is False:
+            return False
+        return None if left is None or right is None else True
     if isinstance(node, Or):
-        return _test(node.left, obj, context) or _test(node.right, obj, context)
+        left = _test(node.left, obj, context)
+        if left is True:
+            return True
+        right = _test(node.right, obj, context)
+        if right is True:
+            return True
+        return None if left is None or right is None else False
     if isinstance(node, Not):
-        return not _test(node.operand, obj, context)
+        result = _test(node.operand, obj, context)
+        return None if result is None else not result
+
+    if isinstance(node, IsMissing):
+        return _absent(context.value(obj, node.attribute)) != node.negated
 
     if isinstance(node, Truthy):
-        return _truthy(context.value(obj, node.attribute))
+        value = context.value(obj, node.attribute)
+        return None if _absent(value) else _truthy(value)
 
     if isinstance(node, Compare):
         left = context.value(obj, node.attribute)
-        if left is MISSING:
-            return False
+        if _absent(left):
+            return None
         right = _operand(node.operand, obj, context, node.attribute)
-        if right is MISSING:
-            return False
+        if _absent(right):
+            return None
         return _compare(left, node.operator, right)
 
     if isinstance(node, In):
         left = context.value(obj, node.attribute)
-        if left is MISSING:
-            return False
-        return any(
-            _compare(left, "=", value)
+        if _absent(left):
+            return None
+        results = [
+            None if _absent(value) else _compare(left, "=", value)
             for value in (_operand(o, obj, context, node.attribute) for o in node.operands)
-            if value is not MISSING
-        )
+        ]
+        if True in results:
+            return True
+        return None if None in results else False
 
     if isinstance(node, Contains):
         left = context.value(obj, node.attribute)
         right = _operand(node.operand, obj, context, node.attribute)
-        if left is MISSING or right is MISSING:
-            return False
+        if _absent(left) or _absent(right):
+            return None
         if isinstance(left, (list, tuple, set, frozenset)):
-            return any(_compare(item, "=", right) for item in left)
+            return any(_compare(item, "=", right) is True for item in left)
         return _as_text(right).casefold() in _as_text(left).casefold()
 
     if isinstance(node, Like):
         left = context.value(obj, node.attribute)
         right = _operand(node.operand, obj, context, node.attribute)
-        if left is MISSING or left is None or right is MISSING or right is None:
-            return False
+        if _absent(left) or _absent(right):
+            return None
         pattern = _pattern(_as_text(right))
         if isinstance(left, (list, tuple, set, frozenset)):
             return any(pattern.fullmatch(_as_text(item)) for item in left)
@@ -705,13 +784,17 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _compare(left: Any, operator: str, right: Any) -> bool:
+def _compare(left: Any, operator: str, right: Any) -> bool | None:
+    """Compare two present values: True, False, or None when the answer is unknown."""
     if left is None or right is None:
-        equal = left is None and right is None
-        return equal if operator == "=" else (not equal if operator == "!=" else False)
+        return None
 
     if isinstance(left, bool) or isinstance(right, bool):
-        left_bool, right_bool = _truthy(left), _truthy(right)
+        # A boolean only compares with another boolean, or a word or number
+        # that is plainly one. "K" is not "true", whatever it is.
+        left_bool, right_bool = _as_bool(left), _as_bool(right)
+        if left_bool is None or right_bool is None:
+            return _unlike(operator)
         if operator == "=":
             return left_bool == right_bool
         if operator == "!=":
@@ -730,12 +813,40 @@ def _compare(left: Any, operator: str, right: Any) -> bool:
             return float(left) != float(right)
         return _ordered(float(left), operator, float(right))
 
+    if _is_number(left) or _is_number(right):
+        # A number against text that is not one: "25 kVA" or "UNKNOWN". They
+        # are not equal, but neither is bigger -- alphabetical order would
+        # put "25 kVA" above 100 -- so an ordering is unknown.
+        return _unlike(operator)
+
     left_text, right_text = str(left).casefold(), str(right).casefold()
     if operator == "=":
         return left_text == right_text
     if operator == "!=":
         return left_text != right_text
     return _ordered(left_text, operator, right_text)
+
+
+def _unlike(operator: str) -> bool | None:
+    """Two values of kinds that cannot be compared: unequal, and unordered."""
+    if operator == "=":
+        return False
+    if operator == "!=":
+        return True
+    return None
+
+
+#: Words that are plainly a boolean, when compared with one.
+_BOOLEAN_WORDS = {"true": True, "yes": True, "false": False, "no": False}
+
+
+def _as_bool(value: Any) -> bool | None:
+    """A value as a boolean, or None when it is not plainly one."""
+    if isinstance(value, bool):
+        return value
+    if _is_number(value):
+        return {0: False, 1: True}.get(value)
+    return _BOOLEAN_WORDS.get(str(value).strip().casefold())
 
 
 def _ordered(left: Any, operator: str, right: Any) -> bool:
