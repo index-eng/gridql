@@ -5,6 +5,7 @@ should agree on what a generator is, what kind it is, and what it is rated
 at, and should say nothing about a kind or a rating its source did not give.
 """
 
+import contextlib
 import sqlite3
 import tempfile
 import unittest
@@ -120,8 +121,9 @@ class StorageTests(unittest.TestCase):
 
     def test_a_database_from_before_generators_still_loads(self):
         save_network(build_sample_network(), self.path)
-        with sqlite3.connect(self.path) as connection:
+        with contextlib.closing(sqlite3.connect(self.path)) as connection:
             connection.execute("DROP TABLE generators")
+            connection.commit()
         self.assertEqual(
             sorted(load_network(self.path).objects), sorted(build_sample_network().objects)
         )

@@ -1044,6 +1044,8 @@ Examples include:
 - equipment without feeder membership
 - equipment without connections
 - hard links between feeders that are not represented as ties
+- sections cut off from their feeder with generation on them, whose energisation is unknown
+  because they may be backfed
 - values too large to be believable, such as a voltage written in volts where kV was meant
 
 Warnings cause a non-zero result only when `--strict` is used.

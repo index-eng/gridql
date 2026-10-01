@@ -26,7 +26,7 @@ from typing import Iterator
 
 from .color import PLAIN, Palette
 from .model import Device, Feeder, Network, Substation, Switch
-from .model.device import VALID_STATES
+from .model.device import VALID_STATES, can_generate
 
 ERROR = "error"
 WARNING = "warning"
@@ -101,6 +101,7 @@ def validate(network: Network) -> ValidationReport:
     _check_references(network, report)
     _check_feeder_heads(network, report)
     _check_switch_states(network, report)
+    _check_backfeed(network, report)
     _check_connections(network, report)
     _check_structure(network, report)
     _check_magnitudes(network, report)
@@ -254,6 +255,61 @@ def _check_switch_states(network: Network, report: ValidationReport) -> None:
                     f"{device.mrid}: {attribute} is '{value}', expected OPEN or CLOSED",
                     device.mrid,
                 )
+
+
+def _check_backfeed(network: Network, report: ValidationReport) -> None:
+    """Sections cut off from their feeder with generation on them.
+
+    Energisation calls them unknown rather than dead, since the generation
+    may be backfeeding them. That is the honest answer, but it makes them
+    vanish from WHERE NOT energized, so say where they are and why. A
+    generator on a headless feeder is left to that feeder's own warning.
+    """
+    sourced = {
+        feeder.mrid for feeder in network.feeders
+        if feeder.head and feeder.head in network.objects
+    }
+    seen: set[str] = set()
+    for generator in sorted(network.devices, key=lambda d: d.mrid):
+        if generator.mrid in seen or not can_generate(generator):
+            continue
+        if generator.feeder not in sourced or network.is_energized(generator.mrid) is True:
+            continue
+
+        # The section: everything the generator reaches that no feeder head
+        # does, stopping at open switches as energisation does.
+        section, queue = {generator.mrid}, [generator.mrid]
+        while queue:
+            current = queue.pop()
+            obj = network.objects[current]
+            if isinstance(obj, Switch) and obj.is_open:
+                continue
+            for neighbor in network.neighbors(current):
+                if neighbor not in section and network.is_energized(neighbor) is not True:
+                    section.add(neighbor)
+                    queue.append(neighbor)
+        seen |= section
+
+        sources = sorted(m for m in section if can_generate(network.objects[m]))
+        bounds = sorted(
+            {m for m in section if _is_open_switch(network, m)}
+            | {
+                n for m in section for n in network.neighbors(m)
+                if n not in section and _is_open_switch(network, n)
+            }
+        )
+        cut_off = f"behind open {_describe(bounds)}" if bounds else "cut off from its feeder"
+        report.add(
+            WARNING, "possible-backfeed",
+            f"{_describe(sources)}: generation on a section {cut_off}, so its "
+            f"{len(section)} devices may be backfed and their energized is unknown",
+            *sources, *bounds,
+        )
+
+
+def _is_open_switch(network: Network, mrid: str) -> bool:
+    obj = network.objects.get(mrid)
+    return isinstance(obj, Switch) and obj.is_open
 
 
 def _check_connections(network: Network, report: ValidationReport) -> None:

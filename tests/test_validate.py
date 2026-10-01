@@ -227,6 +227,41 @@ class WarningTests(unittest.TestCase):
         self.assertNotIn("unreachable", codes(report))
 
 
+class BackfeedTests(unittest.TestCase):
+    def backfed(self, network):
+        return [f for f in validate(network) if f.code == "possible-backfeed"]
+
+    def test_generation_behind_an_open_switch_is_one_finding_per_section(self):
+        network = build_sample_network()
+        feeder = network.objects["FDR-104"]
+        feeder.add_generator("PV-1", after="XFMR-002", kind="pv", kw=5)
+        feeder.add_generator("PV-2", after="LOAD-002", kind="pv", kw=5)
+        [finding] = self.backfed(network)
+        self.assertEqual(finding.severity, "warning")
+        self.assertEqual(finding.objects, ("PV-1", "PV-2", "SW-002"))
+        self.assertIn("behind open SW-002", finding.message)
+        self.assertIn("4 devices", finding.message)
+
+    def test_generation_the_feeder_reaches_is_not_reported(self):
+        network = build_sample_network()
+        network.objects["FDR-104"].add_generator("SG-1", after="LOAD-001", kind="synchronous")
+        self.assertEqual(self.backfed(network), [])
+
+    def test_closing_the_switch_clears_it(self):
+        network = build_sample_network()
+        network.objects["FDR-104"].add_generator("PV-1", after="XFMR-002", kind="pv")
+        network.objects["SW-002"].state = "CLOSED"
+        self.assertEqual(self.backfed(network), [])
+
+    def test_a_headless_feeder_is_left_to_its_own_warning(self):
+        network = build_sample_network()
+        network.objects["FDR-104"].add_generator("PV-1", after="XFMR-002", kind="pv")
+        network.objects["FDR-104"].head = None
+        report = validate(network)
+        self.assertIn("headless-feeder", codes(report))
+        self.assertNotIn("possible-backfeed", codes(report))
+
+
 class ReportTests(unittest.TestCase):
     def test_errors_are_listed_before_warnings(self):
         network = Network()
