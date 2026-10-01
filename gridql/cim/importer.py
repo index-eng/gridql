@@ -504,8 +504,9 @@ def _enumeration(reference: str | None) -> str | None:
 
 def _power_electronics_units(
     grouped: dict[str, list[_Record]], resolve
-) -> dict[str, list[tuple[str, float | None]]]:
-    """Each inverter's units -- what kind each is and its maxP in watts -- by inverter mRID.
+) -> dict[str, list[tuple[str, float | None, float | None]]]:
+    """Each inverter's units, by inverter mRID: what kind each is, its maxP in
+    watts, and for a battery its ratedE in watt-hours.
 
     The association is written from either end: GridAPPS-D names the unit
     on the connection, other tools the connection on the unit.
@@ -516,7 +517,7 @@ def _power_electronics_units(
         if unit is not None:
             owner_of[unit] = record.mrid
 
-    found: dict[str, list[tuple[str, float | None]]] = {}
+    found: dict[str, list[tuple[str, float | None, float | None]]] = {}
     for cim_class in POWER_ELECTRONICS_UNITS:
         for record in grouped.get(cim_class, []):
             owner = resolve(
@@ -525,7 +526,8 @@ def _power_electronics_units(
             if owner is not None:
                 found.setdefault(owner, []).append(
                     (CIM_GENERATOR_KINDS[cim_class],
-                     _float(record.value(CIM_NS, "PowerElectronicsUnit.maxP")))
+                     _float(record.value(CIM_NS, "PowerElectronicsUnit.maxP")),
+                     _float(record.value(CIM_NS, "BatteryUnit.ratedE")))
                 )
     return found
 
@@ -588,7 +590,9 @@ def _type_fields(cls: type, record: _Record, ends: dict, units: dict) -> dict[st
     return fields
 
 
-def _generator_fields(record: _Record, units: list[tuple[str, float | None]]) -> dict[str, Any]:
+def _generator_fields(
+    record: _Record, units: list[tuple[str, float | None, float | None]]
+) -> dict[str, Any]:
     """A generator's kind and ratings.
 
     A machine's class says its kind, and an inverter's units say what it
@@ -596,15 +600,15 @@ def _generator_fields(record: _Record, units: list[tuple[str, float | None]]) ->
     behind one inverter -- is left without a kind rather than given either.
     CIM rates an inverter's real power on its units (maxP) and a machine's
     apparent power on the machine (ratedS); a rated kW CIM has no place for
-    travels in the gridql: namespace.
+    travels in the gridql: namespace. A battery's capacity is its ratedE.
     """
-    kinds = {kind for kind, _watts in units}
+    kinds = {kind for kind, _watts, _energy in units}
     kind = record.value(GRIDQL_NS, EXT_KIND) or CIM_GENERATOR_KINDS.get(record.cim_class)
     if kind is None and len(kinds) == 1:
         kind = next(iter(kinds))
 
     kw = _float(record.value(GRIDQL_NS, "kw"))
-    rated_p = [watts for _kind, watts in units if watts is not None]
+    rated_p = [watts for _kind, watts, _energy in units if watts is not None]
     if kw is None and rated_p:
         kw = sum(rated_p) / 1000.0
 
@@ -614,7 +618,10 @@ def _generator_fields(record: _Record, units: list[tuple[str, float | None]]) ->
     kva = None if rated_s is None else rated_s / 1000.0
     if kva is None:
         kva = _float(record.value(GRIDQL_NS, "kva"))
-    return {"kind": kind, "kw": kw, "kva": kva}
+
+    rated_e = [energy for _kind, _watts, energy in units if energy is not None]
+    kwh = sum(rated_e) / 1000.0 if rated_e else _float(record.value(GRIDQL_NS, "kwh"))
+    return {"kind": kind, "kw": kw, "kva": kva, "kwh": kwh}
 
 
 def _capacitor_kvar(record: _Record) -> float | None:

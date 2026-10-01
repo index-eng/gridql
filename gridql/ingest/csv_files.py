@@ -74,6 +74,8 @@ ALIASES: dict[str, str] = {
     "secondary_voltage": "secondary_voltage", "low_side_kv": "secondary_voltage",
     "kw": "kw", "load_kw": "kw", "p": "kw",
     "kvar": "kvar", "load_kvar": "kvar", "q": "kvar",
+    "kwh": "kwh", "kwh_rated": "kwh", "rated_kwh": "kwh", "energy_kwh": "kwh",
+    "capacity_kwh": "kwh",
     "length": "length", "length_ft": "length", "len": "length",
     "conductor": "conductor", "wire": "conductor", "conductor_type": "conductor",
     "ampacity": "ampacity", "rated_current": "ampacity", "amps": "ampacity",
@@ -711,7 +713,8 @@ def _device_class(named: str | None) -> tuple[type[Device], str | None]:
 
 
 def _numeric_fields(cls: type) -> tuple[str, ...]:
-    names = ("kva", "primary_voltage", "secondary_voltage", "kw", "kvar", "length", "ampacity")
+    names = ("kva", "primary_voltage", "secondary_voltage", "kw", "kvar", "kwh", "length",
+             "ampacity")
     return tuple(name for name in names if name in _fields(cls))
 
 
@@ -818,7 +821,8 @@ def write_csv(network: Network, directory: str | Path) -> list[Path]:
 def _device_columns(network: Network) -> tuple[str, ...]:
     base = ["mrid", "name", "type", "feeder", "substation", "phases", "voltage"]
     optional = ["state", "normal_state", "is_tie", "kva", "primary_voltage",
-                "secondary_voltage", "kw", "kvar", "length", "conductor", "ampacity", "kind"]
+                "secondary_voltage", "kw", "kvar", "length", "conductor", "ampacity", "kind",
+                "kwh"]
     present = [name for name in optional if any(_has(d, name) for d in network.devices)]
     nodes = list(NODE_COLUMNS) if network.nodes else []
     return _with_extras(base + present + nodes, network.devices)

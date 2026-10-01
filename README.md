@@ -404,11 +404,13 @@ supported.
 and inverters. Each has a `kind` -- `pv`, `storage`, `wind`, `synchronous` or `induction` -- where
 its source said, and none where it did not; a generator of unstated kind is not assumed to be an
 inverter. `kw` is its rated real power output and `kva` its machine or inverter rating; neither is
-what it is producing now.
+what it is producing now. A battery's `kwh` is what it holds when full, not its present charge, and
+is energy rather than power, so `kwh >= 1MWh` works and `kwh >= 500kW` is refused.
 
 ``` text
 FIND generators WHERE kind = "pv" SELECT feeder, COUNT(*), SUM(kw) GROUP BY feeder
 FIND generators DOWNSTREAM OF "REC-1201-01" SELECT name, kind, kw
+FIND generators WHERE kind = "storage" SELECT SUM(kw), SUM(kwh)
 ```
 
 The semantic model can also retain equipment that has no dedicated GridQL type, particularly when
@@ -1510,8 +1512,9 @@ gridql import-dss Master.dss --db grid.sqlite
 ```
 
 OpenDSS models are translated into the same GridQL semantic model used by the other import paths.
-`Generator`, `PVSystem`, `Storage` and `WindGen` elements become generators with their ratings,
-taking OpenDSS's defaults where the script leaves a rating unset.
+`Generator`, `PVSystem`, `Storage` and `WindGen` elements become generators with their ratings, and
+storage with its `kWhrated` capacity, taking OpenDSS's defaults where the script leaves a rating
+unset.
 
 This allows the same topology-oriented queries to operate against OpenDSS models without changing
 the query language.

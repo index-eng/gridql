@@ -349,6 +349,7 @@ class Generator(Device):
 
     ``kw`` is the rated real power output and ``kva`` the machine's or the
     inverter's apparent-power rating; neither says what it is producing now.
+    ``kwh`` is the energy a storage unit holds when full, not what it holds now.
     ``kind`` is pv, storage, wind, synchronous or induction where the source
     said, and unset where it did not -- a generator of unstated kind is not
     assumed to be an inverter.
@@ -358,11 +359,12 @@ class Generator(Device):
     CIM_CLASS = "PowerElectronicsConnection"
     #: Every class a generator exports as, depending on its kind.
     CIM_CLASSES = ("SynchronousMachine", "AsynchronousMachine", "PowerElectronicsConnection")
-    COLUMNS = ("mrid", "name", "type", "feeder", "phases", "voltage", "kind", "kw", "kva")
+    COLUMNS = ("mrid", "name", "type", "feeder", "phases", "voltage", "kind", "kw", "kva", "kwh")
 
     kind: str | None = None
     kw: float | None = None
     kva: float | None = None
+    kwh: float | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -373,6 +375,8 @@ class Generator(Device):
             self.kw = parse_quantity(self.kw, "kW")
         if self.kva is not None:
             self.kva = parse_quantity(self.kva, "kVA")
+        if self.kwh is not None:
+            self.kwh = parse_quantity(self.kwh, "kWh")
 
     def attribute(self, name: str) -> Any:
         if name.lower() == "cim_class":

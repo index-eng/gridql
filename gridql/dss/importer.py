@@ -308,10 +308,12 @@ class _Builder:
         """Generation and its ratings, with OpenDSS's defaults where a property is unset.
 
         A PVSystem's Pmpp is its array's rating and its kVA the inverter's;
-        a Storage element's kWrated is what it can discharge. WindGen's
+        a Storage element's kWrated is what it can discharge and its
+        kWhrated what it holds when full. WindGen's
         defaults are left alone: an unset rating stays unknown.
         """
         kva = number(obj.get("kva"))
+        kwh = None
         if obj.cls == "generator":
             kw = number(obj.get("kw", "1000"))
             if kva is None and kw is not None:
@@ -322,12 +324,14 @@ class _Builder:
                 kva = 500.0
         elif obj.cls == "storage":
             kw = number(obj.get("kwrated", "25"))
+            kwh = number(obj.get("kwhrated", "50"))
             if kva is None:
                 kva = kw
         else:
             kw = number(obj.get("kw"))
         self.add(Generator, [obj], obj.name, [obj.get("bus1", "")],
-                 kind=_GENERATION[obj.cls], kw=kw, kva=kva, extras={"dss_class": obj.cls})
+                 kind=_GENERATION[obj.cls], kw=kw, kva=kva, kwh=kwh,
+                 extras={"dss_class": obj.cls})
 
     def generic(self, obj: DssObject) -> None:
         buses = [obj.get("bus1") or ("sourcebus" if obj.cls == "vsource" else "")]

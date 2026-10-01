@@ -86,6 +86,7 @@ CANONICAL_UNITS: dict[str, str] = {
     "kva": "kVA",
     "kw": "kW",
     "kvar": "kVAr",
+    "kwh": "kWh",
     "ampacity": "A",
     "length": "ft",
 }

@@ -18,7 +18,7 @@ from gridql.dss.importer import loads_dss
 from gridql.ingest import read_csv, write_csv
 from gridql.model import Device, Generator
 
-QUERY = "FIND generators SELECT mrid, kind, kw, kva, cim_class ORDER BY mrid"
+QUERY = "FIND generators SELECT mrid, kind, kw, kva, kwh, cim_class ORDER BY mrid"
 
 
 def with_generation():
@@ -26,12 +26,12 @@ def with_generation():
     network = build_sample_network()
     feeder = network.objects["FDR-104"]
     feeder.add_generator("PV-1", after="LOAD-001", kind="solar", kw=50, kva=60)
-    feeder.add_generator("BESS-1", after="LOAD-001", kind="battery", kw=100, kva=100)
+    feeder.add_generator("BESS-1", after="LOAD-001", kind="battery", kw=100, kva=100, kwh=400)
     feeder.add_generator("WT-1", after="LOAD-001", kind="wind", kw=20)
     feeder.add_generator("SG-1", after="LOAD-001", kind="synchronous", kw=500, kva=625)
     feeder.add_generator("IG-1", after="LOAD-001", kind="induction", kw=75)
     feeder.add_generator("DG-1", after="LOAD-001", kind="Diesel", kw="200kW", kva="250kVA")
-    feeder.add_generator("U-1", after="LOAD-001", kw=10)
+    feeder.add_generator("U-1", after="LOAD-001", kw=10, kwh=30)  # capacity of unknown kind
     return network
 
 
@@ -69,6 +69,20 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(
             rows(build_with("PV-2", kind="pv", kw="0.5MW"), "FIND der SELECT kw"), [{"kw": 500.0}]
         )
+
+    def test_capacity_is_energy_not_power(self):
+        network = build_with("BESS-2", kind="storage", kw=500, kwh="2MWh")
+        self.assertEqual(network.objects["BESS-2"].kwh, 2000.0)
+        self.assertEqual(
+            execute(network, "FIND der WHERE kwh >= 1.5MWh").mrids, ["BESS-2"]
+        )
+        with self.assertRaisesRegex(Exception, "energy"):
+            execute(network, "FIND der WHERE kwh >= 500kW")
+
+    def test_storage_duration_follows_from_its_ratings(self):
+        network = build_with("BESS-2", kind="storage", kw=500, kwh=2000)
+        [row] = rows(network, "FIND der WHERE kind = \"storage\" SELECT SUM(kwh), SUM(kw)")
+        self.assertEqual(row["SUM(kwh)"] / row["SUM(kw)"], 4.0)
 
     def test_rated_output_aggregates_by_kind(self):
         result = rows(
@@ -128,6 +142,16 @@ class StorageTests(unittest.TestCase):
             sorted(load_network(self.path).objects), sorted(build_sample_network().objects)
         )
 
+    def test_a_database_from_before_capacity_loads_and_takes_a_save(self):
+        save_network(with_generation(), self.path)
+        with contextlib.closing(sqlite3.connect(self.path)) as connection:
+            connection.execute("ALTER TABLE generators DROP COLUMN kwh")
+            connection.commit()
+        loaded = load_network(self.path)
+        self.assertIsNone(loaded.objects["BESS-1"].kwh)
+        save_network(with_generation(), self.path)
+        self.assertEqual(load_network(self.path).objects["BESS-1"].kwh, 400.0)
+
 
 class CsvTests(unittest.TestCase):
     def setUp(self):
@@ -160,6 +184,23 @@ G-1,der,F1,wind,20
 """).network
         self.assertEqual(rows(network, "FIND der SELECT kind, kw"), [{"kind": "wind", "kw": 20.0}])
 
+    def test_a_capacity_column_is_read_in_its_unit(self):
+        network = self.load("""
+mrid,type,feeder,kw,capacity_kwh
+BAT-1,battery,F1,250,1MWh
+""").network
+        self.assertEqual(rows(network, "FIND der SELECT kw, kwh"), [{"kw": 250.0, "kwh": 1000.0}])
+
+    def test_capacity_written_in_watt_hours_is_flagged(self):
+        from gridql.validate import validate
+
+        network = self.load("""
+mrid,type,feeder,kwh
+BAT-1,battery,F1,400000000
+""").network
+        [finding] = [f for f in validate(network) if f.code == "implausible-value"]
+        self.assertIn("Wh rather than kWh", finding.message)
+
     def test_generators_survive_a_round_trip(self):
         network = with_generation()
         out = self.directory / "out"
@@ -182,6 +223,17 @@ class CimTests(unittest.TestCase):
                     rows(network, "FIND generators SELECT mrid, kind, kw, kva"),
                     [{"mrid": "PV1", "kind": "pv", "kw": 300.0, "kva": 330.0}],
                 )
+
+    def test_a_battery_takes_its_capacity_from_ratedE(self):
+        text = inverter("unit names the connection").replace("PhotovoltaicUnit", "BatteryUnit")
+        text = text.replace(
+            "</cim:BatteryUnit>",
+            "<cim:BatteryUnit.ratedE>1200000</cim:BatteryUnit.ratedE></cim:BatteryUnit>",
+        )
+        self.assertEqual(
+            rows(loads_cim(text).network, "FIND generators SELECT kind, kw, kwh"),
+            [{"kind": "storage", "kw": 300.0, "kwh": 1200.0}],
+        )
 
     def test_an_inverter_with_units_of_two_kinds_is_given_neither(self):
         text = inverter("unit names the connection").replace(
@@ -243,19 +295,20 @@ New Line.sw bus1=b1 bus2=b2 switch=yes
 Open Line.sw
 New Load.ld bus1=b2 kw=10
 New PVSystem.pv bus1=b2 pmpp=50 kva=55
-New Storage.bat bus1=b1 kwrated=100
+New Storage.bat bus1=b1 kwrated=100 kwhrated=400
 New Generator.g bus1=b1 kw=300
 New WindGen.w bus1=b1
 """
 
     def test_generation_is_read_with_its_ratings(self):
         network = loads_dss(self.MODEL).network
-        query = "FIND generators SELECT mrid, kind, kw, kva ORDER BY mrid"
+        query = "FIND generators SELECT mrid, kind, kw, kva, kwh ORDER BY mrid"
         self.assertEqual(rows(network, query), [
-            {"mrid": "bat", "kind": "storage", "kw": 100.0, "kva": 100.0},
-            {"mrid": "g", "kind": "synchronous", "kw": 300.0, "kva": 360.0},
-            {"mrid": "pv", "kind": "pv", "kw": 50.0, "kva": 55.0},
-            {"mrid": "w", "kind": "wind", "kw": None, "kva": None},  # no defaults assumed
+            {"mrid": "bat", "kind": "storage", "kw": 100.0, "kva": 100.0, "kwh": 400.0},
+            {"mrid": "g", "kind": "synchronous", "kw": 300.0, "kva": 360.0, "kwh": None},
+            {"mrid": "pv", "kind": "pv", "kw": 50.0, "kva": 55.0, "kwh": None},
+            # no defaults assumed
+            {"mrid": "w", "kind": "wind", "kw": None, "kva": None, "kwh": None},
         ])
 
     def test_opendss_defaults_fill_what_the_model_leaves_unset(self):
@@ -266,6 +319,10 @@ New WindGen.w bus1=b1
             {"mrid": "bat", "kw": 25.0, "kva": 25.0},
             {"mrid": "pv", "kw": 500.0, "kva": 500.0},
         ])
+
+    def test_storage_capacity_defaults_as_opendss_does(self):
+        network = loads_dss("New Circuit.c1 bus1=src\nNew Storage.bat bus1=src\n").network
+        self.assertEqual(network.objects["bat"].kwh, 50.0)
 
     def test_the_pv_behind_the_open_switch_may_backfeed(self):
         network = loads_dss(self.MODEL).network

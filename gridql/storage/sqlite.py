@@ -45,7 +45,7 @@ _EXTENSIONS: tuple[tuple[type[Device], str, tuple[str, ...]], ...] = (
     (LineSegment, "lines", ("length", "conductor", "ampacity")),
     (Load, "loads", ("kw", "kvar")),
     (Capacitor, "capacitors", ("kvar", "normal_state", "state")),
-    (Generator, "generators", ("kind", "kw", "kva")),
+    (Generator, "generators", ("kind", "kw", "kva", "kwh")),
     (Switch, "switches", ("normal_state", "state", "is_tie")),
 )
 
@@ -84,8 +84,20 @@ def open_database(path: str | Path) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+#: Columns added to a table after it first shipped, with their SQL type.
+#: CREATE TABLE IF NOT EXISTS leaves an older table as it was, so a save
+#: into a database written before them adds them first.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("generators", "kwh", "REAL"),
+)
+
+
 def create_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    for table, column, sql_type in _ADDED_COLUMNS:
+        present = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if column not in present:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
     connection.execute(
         "INSERT INTO meta(key, value) VALUES ('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -330,7 +342,8 @@ def _read_extensions(connection: sqlite3.Connection) -> dict[str, dict[str, Any]
         if not _has_table(connection, table):
             continue
         for row in connection.execute(f"SELECT * FROM {table}"):
-            values = {column: row[column] for column in columns}
+            # A column added since the database was written reads as unset.
+            values = {column: row[column] for column in columns if column in row.keys()}
             if "is_tie" in values:
                 values["is_tie"] = bool(values["is_tie"])
             found[row["device_mrid"]] = values

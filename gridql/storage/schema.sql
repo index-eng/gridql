@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS generators (
     device_mrid TEXT PRIMARY KEY REFERENCES devices(mrid) ON DELETE CASCADE,
     kind        TEXT,
     kw          REAL,
-    kva         REAL
+    kva         REAL,
+    kwh         REAL
 );
 
 -- Connectivity is undirected. Each edge is stored once, with the lower mRID

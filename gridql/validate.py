@@ -120,6 +120,7 @@ _CEILINGS: dict[str, tuple[float, str]] = {
     "kva": (2_000_000.0, "written in VA rather than kVA"),
     "kw": (2_000_000.0, "written in W rather than kW"),
     "kvar": (2_000_000.0, "written in var rather than kvar"),
+    "kwh": (20_000_000.0, "written in Wh rather than kWh"),
     "length": (2_000_000.0, "not in feet"),
 }
 

@@ -251,7 +251,7 @@ class SameFeederTwoWaysTests(unittest.TestCase):
     """
 
     FIELDS = ("type", "kva", "primary_voltage", "secondary_voltage", "kw", "kvar",
-              "length", "normal_state")
+              "kwh", "length", "normal_state")
 
     def compare(self, name):
         cim, dss = load(name).network, load(f"{name}-dss").network

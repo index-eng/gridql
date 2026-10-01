@@ -281,6 +281,9 @@ def _write_device(root: ET.Element, selection: _Selection, device: Device) -> No
                  f"{device.mrid}_UNIT")
         elif device.kw is not None:
             _text(element, GRIDQL_NS, "kw", _number(device.kw))
+        if device.kwh is not None and device.kind != "storage":
+            # Only a BatteryUnit has a place for capacity in CIM.
+            _text(element, GRIDQL_NS, "kwh", _number(device.kwh))
 
     _extras(element, device)
 
@@ -301,6 +304,8 @@ def _write_generator_unit(root: ET.Element, generator: Generator) -> None:
     element = _identified(root, unit_class, f"{generator.mrid}_UNIT")
     if generator.kw is not None:
         _text(element, CIM_NS, "PowerElectronicsUnit.maxP", _number(generator.kw * 1000.0))
+    if generator.kwh is not None and unit_class == "BatteryUnit":
+        _text(element, CIM_NS, "BatteryUnit.ratedE", _number(generator.kwh * 1000.0))
 
 
 _CLASS_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
