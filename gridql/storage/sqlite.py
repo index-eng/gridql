@@ -25,6 +25,7 @@ from ..model import (
     Capacitor,
     Device,
     Feeder,
+    Generator,
     LineSegment,
     Load,
     Network,
@@ -44,6 +45,7 @@ _EXTENSIONS: tuple[tuple[type[Device], str, tuple[str, ...]], ...] = (
     (LineSegment, "lines", ("length", "conductor", "ampacity")),
     (Load, "loads", ("kw", "kvar")),
     (Capacitor, "capacitors", ("kvar", "normal_state", "state")),
+    (Generator, "generators", ("kind", "kw", "kva")),
     (Switch, "switches", ("normal_state", "state", "is_tie")),
 )
 
@@ -167,7 +169,7 @@ def _unstorable(network: Network) -> list[str]:
 
 def _clear(connection: sqlite3.Connection) -> None:
     for table in ("terminals", "connections", "switches", "transformers", "lines", "loads",
-                  "capacitors", "devices", "feeders", "substations"):
+                  "capacitors", "generators", "devices", "feeders", "substations"):
         connection.execute(f"DELETE FROM {table}")
 
 
@@ -323,6 +325,10 @@ def _read_extensions(connection: sqlite3.Connection) -> dict[str, dict[str, Any]
     """Every extension row, keyed by device mRID."""
     found: dict[str, dict[str, Any]] = {}
     for _cls, table, columns in _EXTENSIONS:
+        # A database written before generators were stored has no table for
+        # them; its generation, if any, was saved as plain devices.
+        if not _has_table(connection, table):
+            continue
         for row in connection.execute(f"SELECT * FROM {table}"):
             values = {column: row[column] for column in columns}
             if "is_tie" in values:

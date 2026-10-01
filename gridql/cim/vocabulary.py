@@ -26,6 +26,7 @@ from ..model import (
     Device,
     Feeder,
     Fuse,
+    Generator,
     GridObject,
     LineSegment,
     Load,
@@ -84,6 +85,9 @@ CIM_TO_MODEL: dict[str, type[GridObject]] = {
     "EnergyConsumerPhase": None,  # handled as a phase annotation, not an object
     "LinearShuntCompensator": Capacitor,
     "ShuntCompensator": Capacitor,
+    "SynchronousMachine": Generator,
+    "AsynchronousMachine": Generator,
+    "PowerElectronicsConnection": Generator,
 }
 CIM_TO_MODEL = {name: cls for name, cls in CIM_TO_MODEL.items() if cls is not None}
 
@@ -105,6 +109,10 @@ STRUCTURAL_CLASSES = frozenset(
         "SwitchPhase",
         "ShuntCompensatorPhase",
         "LinearShuntCompensatorPhase",
+        "PowerElectronicsConnectionPhase",
+        "PhotovoltaicUnit",
+        "BatteryUnit",
+        "PowerElectronicsWindUnit",
         "VoltageLevel",
         "Bay",
         "GeographicalRegion",
@@ -179,3 +187,6 @@ EXT_IS_TIE = "isTie"
 EXT_HEAD = "headTerminalEquipment"
 EXT_EXTRAS = "extras"
 EXT_DEVICE_TYPE = "deviceType"
+EXT_KIND = "kind"
+#: The units of a PowerElectronicsConnection: what its inverter converts.
+POWER_ELECTRONICS_UNITS = ("PhotovoltaicUnit", "BatteryUnit", "PowerElectronicsWindUnit")

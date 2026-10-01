@@ -91,9 +91,9 @@ FOREIGN = """<?xml version="1.0" encoding="UTF-8"?>
     <cim:EnergyConsumer.p>25000</cim:EnergyConsumer.p>
     <cim:EnergyConsumer.q>8000</cim:EnergyConsumer.q>
   </cim:ConformLoad>
-  <cim:SynchronousMachine rdf:ID="GEN1">
+  <cim:StaticVarCompensator rdf:ID="SVC1">
     <cim:IdentifiedObject.name>not modelled</cim:IdentifiedObject.name>
-  </cim:SynchronousMachine>
+  </cim:StaticVarCompensator>
   <cim:ConnectivityNode rdf:ID="CN1"/>
   <cim:ConnectivityNode rdf:ID="CN2"/>
   <cim:Terminal rdf:ID="T1">
@@ -386,7 +386,7 @@ class ForeignDocumentTests(unittest.TestCase):
         )
 
     def test_unsupported_classes_are_reported_not_dropped_silently(self):
-        self.assertEqual(self.document.report.ignored, {"SynchronousMachine": 1})
+        self.assertEqual(self.document.report.ignored, {"StaticVarCompensator": 1})
 
     def test_structural_classes_are_not_reported_as_ignored(self):
         for name in ("Terminal", "ConnectivityNode", "BaseVoltage"):
@@ -395,7 +395,7 @@ class ForeignDocumentTests(unittest.TestCase):
     def test_the_summary_reads_as_a_report(self):
         summary = self.document.report.summary()
         self.assertIn("imported 4 devices", summary)
-        self.assertIn("SynchronousMachine", summary)
+        self.assertIn("StaticVarCompensator", summary)
 
     def test_a_feeder_with_no_inferable_head_says_so(self):
         document = loads_cim(FOREIGN.replace("cim:Breaker", "cim:LoadBreakSwitch"))

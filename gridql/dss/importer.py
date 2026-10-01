@@ -38,6 +38,7 @@ from ..model import (
     Capacitor,
     Device,
     Fuse,
+    Generator,
     LineSegment,
     Load,
     Network,
@@ -62,15 +63,20 @@ _DESCRIPTIVE = frozenset({
 _GENERIC = {
     "vsource": "EnergySource",
     "isource": "EnergySource",
-    "generator": "SynchronousMachine",
-    "windgen": "PowerElectronicsConnection",
-    "pvsystem": "PowerElectronicsConnection",
-    "storage": "PowerElectronicsConnection",
     "reactor": None,  # series or shunt, decided per object
     "upfc": None,
     "gicsource": None,
     "vccs": None,
     "fault": None,
+}
+
+#: Generation, by OpenDSS class -> its kind. A Generator is OpenDSS's machine
+#: model, which its own CIM export writes as a SynchronousMachine.
+_GENERATION = {
+    "generator": "synchronous",
+    "pvsystem": "pv",
+    "storage": "storage",
+    "windgen": "wind",
 }
 
 _PROTECTION = {"fuse": Fuse, "recloser": Recloser, "relay": Breaker}
@@ -152,6 +158,8 @@ class _Builder:
                 self.load(obj)
             elif obj.cls == "capacitor":
                 self.capacitor(obj)
+            elif obj.cls in _GENERATION:
+                self.generator(obj)
             elif obj.cls in _GENERIC:
                 self.generic(obj)
             else:
@@ -295,6 +303,31 @@ class _Builder:
         if obj.get("bus2") and not _grounded(obj.get("bus2")):
             buses.append(obj.get("bus2"))
         self.add(Capacitor, [obj], obj.name, buses, kvar=kvar, normal_state=state, state=state)
+
+    def generator(self, obj: DssObject) -> None:
+        """Generation and its ratings, with OpenDSS's defaults where a property is unset.
+
+        A PVSystem's Pmpp is its array's rating and its kVA the inverter's;
+        a Storage element's kWrated is what it can discharge. WindGen's
+        defaults are left alone: an unset rating stays unknown.
+        """
+        kva = number(obj.get("kva"))
+        if obj.cls == "generator":
+            kw = number(obj.get("kw", "1000"))
+            if kva is None and kw is not None:
+                kva = kw * 1.2
+        elif obj.cls == "pvsystem":
+            kw = number(obj.get("pmpp", "500"))
+            if kva is None:
+                kva = 500.0
+        elif obj.cls == "storage":
+            kw = number(obj.get("kwrated", "25"))
+            if kva is None:
+                kva = kw
+        else:
+            kw = number(obj.get("kw"))
+        self.add(Generator, [obj], obj.name, [obj.get("bus1", "")],
+                 kind=_GENERATION[obj.cls], kw=kw, kva=kva, extras={"dss_class": obj.cls})
 
     def generic(self, obj: DssObject) -> None:
         buses = [obj.get("bus1") or ("sourcebus" if obj.cls == "vsource" else "")]

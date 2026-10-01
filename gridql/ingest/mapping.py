@@ -74,7 +74,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "mrid", "name", "type", "feeder", "substation", "phases", "voltage",
         "state", "normal_state", "is_tie",
         "kva", "primary_voltage", "secondary_voltage",
-        "kw", "kvar", "length", "conductor", "ampacity",
+        "kw", "kvar", "length", "conductor", "ampacity", "kind",
         "from_node", "to_node",
     ),
     "connections": ("from_device", "to_device"),

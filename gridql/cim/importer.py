@@ -20,18 +20,25 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from ..errors import GridQLError
-from ..model import Capacitor, Device, LineSegment, Load, Network, Switch, Transformer
+from ..model import (
+    Capacitor, Device, Generator, LineSegment, Load, Network, Switch, Transformer,
+)
+from ..model.device import CIM_GENERATOR_KINDS
+from ..model.types import TYPE_CLASSES
 from ..model.feeder import Feeder, Substation
 from ..units import convert
 from .vocabulary import (
     CIM_NS,
     CIM_TO_MODEL,
+    EXT_DEVICE_TYPE,
     EXT_EXTRAS,
     EXT_HEAD,
     EXT_IS_TIE,
+    EXT_KIND,
     EXT_PHASES,
     GRIDQL_NS,
     MODEL_DESCRIPTION_PREFIX,
+    POWER_ELECTRONICS_UNITS,
     RDF_NS,
     STRUCTURAL_CLASSES,
     is_cim_namespace,
@@ -295,6 +302,7 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
             report.feeders += 1
 
     ends = _transformer_ends(grouped, resolve, base_voltages)
+    units = _power_electronics_units(grouped, resolve)
     phases_of = _phases(grouped, resolve)
     wired = {
         resolve(record.reference(CIM_NS, "Terminal.ConductingEquipment"))
@@ -307,6 +315,10 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
 
     for record in records:
         cls = model_class_for(record.cim_class)
+        # Equipment CIM has no class for, written by GridQL, says what it was.
+        typed = TYPE_CLASSES.get(record.value(GRIDQL_NS, EXT_DEVICE_TYPE) or "")
+        if typed is not None and issubclass(typed, Device):
+            cls = typed
         if (
             cls is None
             and record.cim_class not in STRUCTURAL_CLASSES
@@ -345,7 +357,7 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
         phases = record.value(GRIDQL_NS, EXT_PHASES) or phases_of.get(record.mrid)
         if phases:
             fields["phases"] = phases
-        fields.update(_type_fields(cls, record, ends))
+        fields.update(_type_fields(cls, record, ends, units))
         if fields["voltage"] is None and issubclass(cls, Transformer):
             fields["voltage"] = ends.get(record.mrid, {}).get(1, {}).get("base_voltage")
 
@@ -490,7 +502,35 @@ def _enumeration(reference: str | None) -> str | None:
     return reference.rsplit("#", 1)[-1].rsplit(".", 1)[-1]
 
 
-def _type_fields(cls: type, record: _Record, ends: dict) -> dict[str, Any]:
+def _power_electronics_units(
+    grouped: dict[str, list[_Record]], resolve
+) -> dict[str, list[tuple[str, float | None]]]:
+    """Each inverter's units -- what kind each is and its maxP in watts -- by inverter mRID.
+
+    The association is written from either end: GridAPPS-D names the unit
+    on the connection, other tools the connection on the unit.
+    """
+    owner_of: dict[str, str] = {}
+    for record in grouped.get("PowerElectronicsConnection", []):
+        unit = resolve(record.reference(CIM_NS, "PowerElectronicsConnection.PowerElectronicsUnit"))
+        if unit is not None:
+            owner_of[unit] = record.mrid
+
+    found: dict[str, list[tuple[str, float | None]]] = {}
+    for cim_class in POWER_ELECTRONICS_UNITS:
+        for record in grouped.get(cim_class, []):
+            owner = resolve(
+                record.reference(CIM_NS, "PowerElectronicsUnit.PowerElectronicsConnection")
+            ) or owner_of.get(record.mrid)
+            if owner is not None:
+                found.setdefault(owner, []).append(
+                    (CIM_GENERATOR_KINDS[cim_class],
+                     _float(record.value(CIM_NS, "PowerElectronicsUnit.maxP")))
+                )
+    return found
+
+
+def _type_fields(cls: type, record: _Record, ends: dict, units: dict) -> dict[str, Any]:
     fields: dict[str, Any] = {}
 
     if issubclass(cls, Switch):
@@ -527,6 +567,9 @@ def _type_fields(cls: type, record: _Record, ends: dict) -> dict[str, Any]:
         fields["kw"] = None if watts is None else watts / 1000.0
         fields["kvar"] = None if vars_ is None else vars_ / 1000.0
 
+    elif issubclass(cls, Generator):
+        fields.update(_generator_fields(record, units.get(record.mrid, [])))
+
     elif issubclass(cls, Capacitor):
         fields["kvar"] = _float(record.value(GRIDQL_NS, "kvar"))
         if fields["kvar"] is None:
@@ -543,6 +586,35 @@ def _type_fields(cls: type, record: _Record, ends: dict) -> dict[str, Any]:
             fields["state"] = state
 
     return fields
+
+
+def _generator_fields(record: _Record, units: list[tuple[str, float | None]]) -> dict[str, Any]:
+    """A generator's kind and ratings.
+
+    A machine's class says its kind, and an inverter's units say what it
+    converts; one with units of more than one kind -- PV and a battery
+    behind one inverter -- is left without a kind rather than given either.
+    CIM rates an inverter's real power on its units (maxP) and a machine's
+    apparent power on the machine (ratedS); a rated kW CIM has no place for
+    travels in the gridql: namespace.
+    """
+    kinds = {kind for kind, _watts in units}
+    kind = record.value(GRIDQL_NS, EXT_KIND) or CIM_GENERATOR_KINDS.get(record.cim_class)
+    if kind is None and len(kinds) == 1:
+        kind = next(iter(kinds))
+
+    kw = _float(record.value(GRIDQL_NS, "kw"))
+    rated_p = [watts for _kind, watts in units if watts is not None]
+    if kw is None and rated_p:
+        kw = sum(rated_p) / 1000.0
+
+    rated_s = _float(record.value(CIM_NS, "PowerElectronicsConnection.ratedS"))
+    if rated_s is None:
+        rated_s = _float(record.value(CIM_NS, "RotatingMachine.ratedS"))
+    kva = None if rated_s is None else rated_s / 1000.0
+    if kva is None:
+        kva = _float(record.value(GRIDQL_NS, "kva"))
+    return {"kind": kind, "kw": kw, "kva": kva}
 
 
 def _capacitor_kvar(record: _Record) -> float | None:

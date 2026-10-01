@@ -34,6 +34,7 @@ from ..model import (
     Capacitor,
     Device,
     Feeder,
+    Generator,
     GridObject,
     LineSegment,
     Load,
@@ -45,9 +46,11 @@ from ..model import (
 from ..units import convert
 from .vocabulary import (
     CIM_NS,
+    EXT_DEVICE_TYPE,
     EXT_EXTRAS,
     EXT_HEAD,
     EXT_IS_TIE,
+    EXT_KIND,
     EXT_PHASES,
     GRIDQL_NS,
     NAMESPACES,
@@ -115,6 +118,8 @@ def export_network(
     for device in selection.devices:
         if isinstance(device, Transformer):
             _write_transformer_ends(root, selection, device)
+        elif isinstance(device, Generator):
+            _write_generator_unit(root, device)
 
     nodes = selection.connectivity_nodes()
     for node, mrid, _terminals in nodes:
@@ -256,7 +261,46 @@ def _write_device(root: ET.Element, selection: _Selection, device: Device) -> No
         _text(element, GRIDQL_NS, "normalState", device.normal_state)
         _text(element, GRIDQL_NS, "state", device.state)
 
+    elif isinstance(device, Generator):
+        cim_class = _cim_class(device)
+        if device.kind:
+            _text(element, GRIDQL_NS, EXT_KIND, device.kind)
+        if cim_class == "ConductingEquipment":
+            # No CIM class says what this is, so say it in the extension.
+            _text(element, GRIDQL_NS, EXT_DEVICE_TYPE, device.TYPE)
+        if device.kva is not None:
+            if cim_class == "PowerElectronicsConnection":
+                _text(element, CIM_NS, "PowerElectronicsConnection.ratedS",
+                      _number(device.kva * 1000.0))
+            elif cim_class in ("SynchronousMachine", "AsynchronousMachine"):
+                _text(element, CIM_NS, "RotatingMachine.ratedS", _number(device.kva * 1000.0))
+            else:
+                _text(element, GRIDQL_NS, "kva", _number(device.kva))
+        if _GENERATOR_UNITS.get(device.kind or ""):
+            _ref(element, CIM_NS, "PowerElectronicsConnection.PowerElectronicsUnit",
+                 f"{device.mrid}_UNIT")
+        elif device.kw is not None:
+            _text(element, GRIDQL_NS, "kw", _number(device.kw))
+
     _extras(element, device)
+
+
+#: Inverter kind -> the PowerElectronicsUnit that says what it converts.
+_GENERATOR_UNITS = {
+    "pv": "PhotovoltaicUnit",
+    "storage": "BatteryUnit",
+    "wind": "PowerElectronicsWindUnit",
+}
+
+
+def _write_generator_unit(root: ET.Element, generator: Generator) -> None:
+    """CIM rates an inverter's real power on the unit behind it, not on the inverter."""
+    unit_class = _GENERATOR_UNITS.get(generator.kind or "")
+    if unit_class is None:
+        return
+    element = _identified(root, unit_class, f"{generator.mrid}_UNIT")
+    if generator.kw is not None:
+        _text(element, CIM_NS, "PowerElectronicsUnit.maxP", _number(generator.kw * 1000.0))
 
 
 _CLASS_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")

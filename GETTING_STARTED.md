@@ -159,8 +159,10 @@ checks the model, `.reload` reads the data again — from a live database, what 
 ### Query by utility concept
 
 `FIND <type>` where the type is `devices`, `switches`, `reclosers`, `breakers`, `fuses`,
-`sectionalizers`, `transformers`, `lines`, `loads`, `capacitors`, `feeders` or `substations`.
-Singular and common shorthand (`xfmrs`, `caps`, `subs`, `conductors`) work too.
+`sectionalizers`, `transformers`, `lines`, `loads`, `capacitors`, `generators`, `feeders` or
+`substations`. Singular and common shorthand (`xfmrs`, `caps`, `subs`, `conductors`, `der`) work too.
+A generator's `kind` is `pv`, `storage`, `wind`, `synchronous` or `induction` where the data says;
+in a CSV a type of `solar` or `battery` says it too.
 
 `switches` deliberately covers every switching device — reclosers, breakers, fuses and ties —
 because that is what an engineer means by it, and what CIM says.
@@ -722,8 +724,8 @@ The importer reads CIM from other tools, understands the specialisations they em
 (`LoadBreakSwitch`, `Disconnector`, `ConformLoad`, …), and reports anything it does not model
 instead of dropping it silently. It has been tested against the IEEE 13, 123 and 8500-node test feeders as
 GridAPPS-D publishes them: it finds each feeder's source, keeps equipment it has no class for so the
-circuit stays whole, and reads phasing, tank-built transformers and capacitor ratings the way
-distribution tools write them.
+circuit stays whole, and reads phasing, tank-built transformers, capacitor ratings and the inverters
+behind PV and batteries the way distribution tools write them.
 
 ### OpenDSS models
 
@@ -734,7 +736,8 @@ gridql --db grid.sqlite 'FIND transformers WHERE kva >= 1000'
 
 An OpenDSS model becomes one feeder, named for its circuit and headed by its source. Switches take
 their kind from the fuse, recloser or relay on them, a regulator bank becomes one transformer, and
-each bus gets its nominal voltage from the nearest of the script's voltage bases. The importer reads
+each bus gets its nominal voltage from the nearest of the script's voltage bases. Generators, PV
+systems, storage and wind turbines come in as generators with their ratings. The importer reads
 the script without solving it, and says which commands it read but did not act on.
 
 ### Using it from Python

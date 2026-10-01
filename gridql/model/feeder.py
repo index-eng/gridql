@@ -26,6 +26,7 @@ from .device import (
     Capacitor,
     Device,
     Fuse,
+    Generator,
     GridObject,
     LineSegment,
     Load,
@@ -153,3 +154,6 @@ class Feeder(Observable, GridObject):
 
     def add_capacitor(self, mrid: str, *, after: Any = _SERIES, **kwargs) -> Capacitor:
         return self._add(Capacitor, mrid, after, kwargs)  # type: ignore[return-value]
+
+    def add_generator(self, mrid: str, *, after: Any = _SERIES, **kwargs) -> Generator:
+        return self._add(Generator, mrid, after, kwargs)  # type: ignore[return-value]

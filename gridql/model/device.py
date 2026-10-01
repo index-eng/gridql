@@ -43,8 +43,8 @@ class _Missing:
 MISSING = _Missing()
 
 #: CIM classes of equipment that can put power onto the network: machines,
-#: inverters (PV, storage, wind) and sources. GridQL has no class for them yet,
-#: so they arrive as plain devices carrying the class their source named.
+#: inverters (PV, storage, wind) and sources. Equipment read as a plain device
+#: still counts when it carries one of these as the class its source named.
 GENERATING_CLASSES = frozenset({
     "EnergySource", "SynchronousMachine", "AsynchronousMachine", "PowerElectronicsConnection",
 })
@@ -52,6 +52,8 @@ GENERATING_CLASSES = frozenset({
 
 def can_generate(obj: Any) -> bool:
     """Whether ``obj`` is equipment that could energise what it is connected to."""
+    if isinstance(obj, Generator):
+        return True
     extras = getattr(obj, "extras", None) or {}
     return extras.get("cim_class") in GENERATING_CLASSES
 
@@ -319,3 +321,76 @@ class Capacitor(Device):
             self.kvar = parse_quantity(self.kvar, "kVAr")
         self.normal_state = str(self.normal_state).upper()
         self.state = self.normal_state if self.state is None else str(self.state).upper()
+
+
+#: What a generator is, as the words for it are written -> the kind GridQL keeps.
+GENERATOR_KINDS: dict[str, str] = {
+    "pv": "pv", "solar": "pv", "photovoltaic": "pv",
+    "storage": "storage", "battery": "storage", "bess": "storage",
+    "wind": "wind",
+    "synchronous": "synchronous",
+    "induction": "induction", "asynchronous": "induction",
+}
+
+#: Kind -> the CIM class it exports as. Inverter-based generation is a
+#: PowerElectronicsConnection whatever its energy comes from.
+_GENERATOR_CIM_CLASS = {
+    "pv": "PowerElectronicsConnection",
+    "storage": "PowerElectronicsConnection",
+    "wind": "PowerElectronicsConnection",
+    "synchronous": "SynchronousMachine",
+    "induction": "AsynchronousMachine",
+}
+
+
+@dataclass(repr=False)
+class Generator(Device):
+    """Equipment that puts power onto the network: a machine or an inverter.
+
+    ``kw`` is the rated real power output and ``kva`` the machine's or the
+    inverter's apparent-power rating; neither says what it is producing now.
+    ``kind`` is pv, storage, wind, synchronous or induction where the source
+    said, and unset where it did not -- a generator of unstated kind is not
+    assumed to be an inverter.
+    """
+
+    TYPE = "generator"
+    CIM_CLASS = "PowerElectronicsConnection"
+    #: Every class a generator exports as, depending on its kind.
+    CIM_CLASSES = ("SynchronousMachine", "AsynchronousMachine", "PowerElectronicsConnection")
+    COLUMNS = ("mrid", "name", "type", "feeder", "phases", "voltage", "kind", "kw", "kva")
+
+    kind: str | None = None
+    kw: float | None = None
+    kva: float | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.kind is not None:
+            written = str(self.kind).strip().lower()
+            self.kind = GENERATOR_KINDS.get(written, written) or None
+        if self.kw is not None:
+            self.kw = parse_quantity(self.kw, "kW")
+        if self.kva is not None:
+            self.kva = parse_quantity(self.kva, "kVA")
+
+    def attribute(self, name: str) -> Any:
+        if name.lower() == "cim_class":
+            return generator_cim_class(self.kind) or "ConductingEquipment"
+        return super().attribute(name)
+
+
+#: CIM class -> the kind it says a generator is. A PowerElectronicsConnection
+#: says only that there is an inverter; its units say what is behind it.
+CIM_GENERATOR_KINDS = {
+    "SynchronousMachine": "synchronous",
+    "AsynchronousMachine": "induction",
+    "PhotovoltaicUnit": "pv",
+    "BatteryUnit": "storage",
+    "PowerElectronicsWindUnit": "wind",
+}
+
+
+def generator_cim_class(kind: str | None) -> str | None:
+    """The CIM class a generator of this kind is, or None when the kind does not say."""
+    return _GENERATOR_CIM_CLASS.get(kind) if kind else None

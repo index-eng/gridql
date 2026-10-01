@@ -189,11 +189,9 @@ another source.
 
 Where the model cannot say, `energized` is unknown rather than false: equipment on a feeder with no
 head device, anything beyond a switch whose state is neither `OPEN` nor `CLOSED`, and a section cut
-off from its feeder with generation on it (a generator, an inverter, or another source), which may be
-backfed. Generation is recognised by its CIM class (`SynchronousMachine`, `AsynchronousMachine`,
-`PowerElectronicsConnection`, `EnergySource`), which the OpenDSS and CIM importers record and a CSV
-`cim_class` column can set. An unknown value matches neither `WHERE energized` nor
-`WHERE NOT energized`; `WHERE energized IS MISSING` finds it.
+off from its feeder with a generator on it, or another source, which may be backfeeding it. Whether
+it does depends on anti-islanding and dispatch, which the model does not hold. An unknown value
+matches neither `WHERE energized` nor `WHERE NOT energized`; `WHERE energized IS MISSING` finds it.
 
 A feeder is energised when its head device is energised and closed, so a feeder whose breaker has
 tripped is not.
@@ -390,15 +388,28 @@ transformers
 lines
 loads
 capacitors
+generators
 feeders
 substations
 ```
 
-Common aliases such as `xfmrs`, `caps`, `conductors`, `subs`, and `circuits` are also supported.
+Common aliases such as `xfmrs`, `caps`, `conductors`, `subs`, `circuits`, `gens`, and `der` are also
+supported.
 
 `switches` is a supertype that includes reclosers, breakers, fuses, and ties.
 
 `devices` matches conducting equipment but not feeder and substation containers.
+
+`generators` covers anything that puts power onto the network: synchronous and induction machines
+and inverters. Each has a `kind` -- `pv`, `storage`, `wind`, `synchronous` or `induction` -- where
+its source said, and none where it did not; a generator of unstated kind is not assumed to be an
+inverter. `kw` is its rated real power output and `kva` its machine or inverter rating; neither is
+what it is producing now.
+
+``` text
+FIND generators WHERE kind = "pv" SELECT feeder, COUNT(*), SUM(kw) GROUP BY feeder
+FIND generators DOWNSTREAM OF "REC-1201-01" SELECT name, kind, kw
+```
 
 The semantic model can also retain equipment that has no dedicated GridQL type, particularly when
 imported from CIM.
@@ -1497,6 +1508,8 @@ gridql import-dss Master.dss --db grid.sqlite
 ```
 
 OpenDSS models are translated into the same GridQL semantic model used by the other import paths.
+`Generator`, `PVSystem`, `Storage` and `WindGen` elements become generators with their ratings,
+taking OpenDSS's defaults where the script leaves a rating unset.
 
 This allows the same topology-oriented queries to operate against OpenDSS models without changing
 the query language.

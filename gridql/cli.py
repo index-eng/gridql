@@ -1197,7 +1197,8 @@ def repl(
             from .model.types import TYPE_CLASSES, plural
 
             for key, cls in sorted(TYPE_CLASSES.items()):
-                print(f"  {plural(key):16s} -> CIM {cls.CIM_CLASS}")
+                classes = getattr(cls, "CIM_CLASSES", (cls.CIM_CLASS,))
+                print(f"  {plural(key):16s} -> CIM {' / '.join(classes)}")
             continue
         if lowered.startswith(".format"):
             parts = line.split()

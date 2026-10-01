@@ -42,7 +42,8 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from ..errors import GridQLError
-from ..model import MISSING, Device, GridObject, Network, Switch
+from ..model import MISSING, Device, Generator, GridObject, Network, Switch
+from ..model.device import CIM_GENERATOR_KINDS, GENERATOR_KINDS
 from ..cim.vocabulary import CIM_TO_MODEL
 from ..model.types import TYPE_ALIASES, TYPE_CLASSES, canonical_unit
 from ..units import UnitError, parse_quantity
@@ -76,6 +77,7 @@ ALIASES: dict[str, str] = {
     "length": "length", "length_ft": "length", "len": "length",
     "conductor": "conductor", "wire": "conductor", "conductor_type": "conductor",
     "ampacity": "ampacity", "rated_current": "ampacity", "amps": "ampacity",
+    "kind": "kind", "generator_type": "kind", "der_type": "kind", "technology": "kind",
     "head": "head", "head_device": "head", "source": "head", "source_device": "head",
     "from_device": "from_device", "from": "from_device", "from_mrid": "from_device",
     "device1": "from_device",
@@ -616,6 +618,16 @@ def _add_device(network, source_row: _Row, report) -> bool:
         if row.get("conductor"):
             fields["conductor"] = row["conductor"]
 
+    if "kind" in _text_fields(cls):
+        handled.add("kind")
+        # A row typed "solar" or "SynchronousMachine" says its kind in its type.
+        typed = (row.get("type") or "").strip()
+        kind = row.get("kind") or GENERATOR_KINDS.get(typed.lower()) or next(
+            (k for c, k in CIM_GENERATOR_KINDS.items() if c.lower() == typed.lower()), None
+        )
+        if kind:
+            fields["kind"] = kind
+
     extras = _extras(row, handled, source_row.extras)
     if note:
         extras["source_type"] = row.get("type", "")
@@ -676,6 +688,9 @@ def _device_class(named: str | None) -> tuple[type[Device], str | None]:
     key = TYPE_ALIASES.get(wanted.lower())
     cls = TYPE_CLASSES.get(key) if key else None
 
+    if cls is None and wanted.lower() in GENERATOR_KINDS:
+        cls = Generator
+
     if cls is None:
         # A GIS or ADMS export usually names equipment by its CIM class.
         cls = next(
@@ -701,7 +716,7 @@ def _numeric_fields(cls: type) -> tuple[str, ...]:
 
 
 def _text_fields(cls: type) -> tuple[str, ...]:
-    return tuple(name for name in ("conductor",) if name in _fields(cls))
+    return tuple(name for name in ("conductor", "kind") if name in _fields(cls))
 
 
 def _fields(cls: type) -> frozenset[str]:
@@ -803,7 +818,7 @@ def write_csv(network: Network, directory: str | Path) -> list[Path]:
 def _device_columns(network: Network) -> tuple[str, ...]:
     base = ["mrid", "name", "type", "feeder", "substation", "phases", "voltage"]
     optional = ["state", "normal_state", "is_tie", "kva", "primary_voltage",
-                "secondary_voltage", "kw", "kvar", "length", "conductor", "ampacity"]
+                "secondary_voltage", "kw", "kvar", "length", "conductor", "ampacity", "kind"]
     present = [name for name in optional if any(_has(d, name) for d in network.devices)]
     nodes = list(NODE_COLUMNS) if network.nodes else []
     return _with_extras(base + present + nodes, network.devices)

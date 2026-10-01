@@ -77,6 +77,13 @@ CREATE TABLE IF NOT EXISTS capacitors (
     state        TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS generators (
+    device_mrid TEXT PRIMARY KEY REFERENCES devices(mrid) ON DELETE CASCADE,
+    kind        TEXT,
+    kw          REAL,
+    kva         REAL
+);
+
 -- Connectivity is undirected. Each edge is stored once, with the lower mRID
 -- first, so a circuit cannot pick up mirrored duplicates.
 CREATE TABLE IF NOT EXISTS connections (
