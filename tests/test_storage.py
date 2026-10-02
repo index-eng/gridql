@@ -93,7 +93,7 @@ class RoundTripTests(StorageTestCase):
         loaded = load_network(self.path)
         self.assertEqual(type(loaded.get("REC-001")).__name__, "Recloser")
         self.assertEqual(type(loaded.get("BRK-001")).__name__, "Breaker")
-        self.assertEqual(loaded.get("REC-001").CIM_CLASS, "ProtectedSwitch")
+        self.assertEqual(loaded.get("REC-001").CIM_CLASS, "Recloser")
 
     def test_extras_round_trip_as_json(self):
         network = Network()

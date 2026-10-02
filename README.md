@@ -1475,22 +1475,30 @@ RETURN cim
 A CIM export includes the supporting objects required by the selected network slice, including
 relevant feeder, substation, voltage, and connectivity information.
 
-Equipment is represented using appropriate CIM classes.
+Export writes CIM17, in its `http://iec.ch/TC57/CIM100#` namespace. Equipment is written under its
+CIM class (a recloser as `Recloser`, PV behind its inverter as a `PowerElectronicsConnection` with a
+`PhotoVoltaicUnit`), and values are converted to CIM's units.
 
-Values are converted to CIM's expected units.
-
-Connectivity is represented using CIM terminals and connectivity nodes.
+Connectivity is represented using CIM terminals and connectivity nodes, numbered and contained as
+CIM expects: each terminal has its sequence number, each connectivity node its container, each
+transformer end the terminal its winding is connected at, and each feeder's head the
+`Terminal.NormalHeadFeeder` association. A consumer that reads only standard CIM gets the whole
+topology, heads included.
 
 GridQL also retains a small set of model-specific information in its own namespace where CIM does
 not directly represent the semantic-model concept.
 
 The goal is lossless GridQL round-tripping while remaining compatible with standards-based CIM
-consumers.
+consumers. The test suite checks every class, property and reference an export writes against the
+published CIM17 schema.
 
 ### CIM import
 
 The importer understands multiple CIM namespace releases and common distribution-system
-specialisations.
+specialisations, including the pre-release spellings GridAPPS-D writes (`PhotovoltaicUnit`, and
+an inverter naming its unit rather than the reverse). A feeder's head is read from
+`Terminal.NormalHeadFeeder` or `Feeder.NormalHeadTerminal`, and equipment contained by a
+`VoltageLevel` or `Bay` is placed in its substation.
 
 Equipment that GridQL does not have a dedicated class for can still be retained as generic devices
 with the source CIM class preserved.
@@ -1569,7 +1577,9 @@ The repository includes tests covering the semantic model, query language, topol
 import/export paths, mappings, validation, and example data.
 
 The distribution-model import path is also tested against IEEE feeder models, including the IEEE
-13-, 123-, and 8500-node feeders.
+13-, 123-, and 8500-node feeders, and CIM export is checked against the CIM17 schema. These files
+are fetched rather than committed, with `python3 tests/reference/fetch.py`; until then the tests
+that need them skip.
 
 These models are useful reference cases because they exercise non-trivial distribution topology
 rather than only simple radial examples.

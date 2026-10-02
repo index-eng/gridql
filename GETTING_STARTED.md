@@ -718,7 +718,9 @@ gridql import-cim vendor-export.xml --db grid.sqlite
 
 A query result *is* the export selection, and it brings what it needs with it — the containing
 feeder and substation, the base voltages its equipment refers to, and the connectivity among the
-selected equipment — so the document stands on its own.
+selected equipment — so the document stands on its own. It is CIM17 (namespace `CIM100`), and
+the tests check it against the published schema, so a tool that reads only standard CIM still gets
+the topology and each feeder's head.
 
 The importer reads CIM from other tools, understands the specialisations they emit
 (`LoadBreakSwitch`, `Disconnector`, `ConformLoad`, …), and reports anything it does not model

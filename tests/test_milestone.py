@@ -71,7 +71,7 @@ class SampleNetworkTests(unittest.TestCase):
     def test_every_device_carries_its_cim_class(self):
         network = build_sample_network()
         by_mrid = {device.mrid: device.CIM_CLASS for device in network.devices}
-        self.assertEqual(by_mrid["REC-001"], "ProtectedSwitch")
+        self.assertEqual(by_mrid["REC-001"], "Recloser")
         self.assertEqual(by_mrid["XFMR-001"], "PowerTransformer")
         self.assertEqual(by_mrid["LOAD-001"], "EnergyConsumer")
         self.assertEqual(by_mrid["LN-001"], "ACLineSegment")

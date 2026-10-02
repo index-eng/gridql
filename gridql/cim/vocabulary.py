@@ -37,7 +37,9 @@ from ..model import (
     Transformer,
 )
 
-CIM_NS = "http://iec.ch/TC57/2013/CIM-schema-cim16#"
+#: What export writes: CIM17 and later share this namespace, and the classes
+#: written here -- PowerElectronicsConnection, Recloser -- are CIM17's.
+CIM_NS = "http://iec.ch/TC57/CIM100#"
 RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 GRIDQL_NS = "urn:gridql:extension#"
 
@@ -110,6 +112,7 @@ STRUCTURAL_CLASSES = frozenset(
         "ShuntCompensatorPhase",
         "LinearShuntCompensatorPhase",
         "PowerElectronicsConnectionPhase",
+        "PhotoVoltaicUnit",
         "PhotovoltaicUnit",
         "BatteryUnit",
         "PowerElectronicsWindUnit",
@@ -189,4 +192,8 @@ EXT_EXTRAS = "extras"
 EXT_DEVICE_TYPE = "deviceType"
 EXT_KIND = "kind"
 #: The units of a PowerElectronicsConnection: what its inverter converts.
-POWER_ELECTRONICS_UNITS = ("PhotovoltaicUnit", "BatteryUnit", "PowerElectronicsWindUnit")
+#: The standard spells it PhotoVoltaicUnit; GridAPPS-D's CIMHub profile,
+#: PhotovoltaicUnit. Both are read; export writes the standard's.
+POWER_ELECTRONICS_UNITS = (
+    "PhotoVoltaicUnit", "PhotovoltaicUnit", "BatteryUnit", "PowerElectronicsWindUnit",
+)

@@ -115,21 +115,36 @@ def export_network(
     for device in selection.devices:
         _write_device(root, selection, device)
 
+    nodes = selection.connectivity_nodes()
+    terminals = selection.terminals()
+
     for device in selection.devices:
         if isinstance(device, Transformer):
-            _write_transformer_ends(root, selection, device)
+            _write_transformer_ends(root, selection, device, terminals.get(device.mrid, []))
         elif isinstance(device, Generator):
             _write_generator_unit(root, device)
 
-    nodes = selection.connectivity_nodes()
-    for node, mrid, _terminals in nodes:
-        _identified(root, "ConnectivityNode", node, mrid=mrid)
+    for node, mrid, members in nodes:
+        element = _identified(root, "ConnectivityNode", node, mrid=mrid)
+        container = selection.node_container([device for device, _terminal in members])
+        if container is not None:
+            _ref(element, CIM_NS, "ConnectivityNode.ConnectivityNodeContainer", container)
 
-    for node, _mrid, terminals in nodes:
-        for device_mrid, terminal_id in terminals:
+    # The terminal each feeder is normally fed through: its head's first.
+    heads = {
+        terminals[feeder.head][0]: feeder.mrid
+        for feeder in selection.feeders
+        if feeder.head and terminals.get(feeder.head)
+    }
+    for node, _mrid, members in nodes:
+        for device_mrid, terminal_id in members:
             terminal = _identified(root, "Terminal", terminal_id)
             _ref(terminal, CIM_NS, "Terminal.ConductingEquipment", device_mrid)
             _ref(terminal, CIM_NS, "Terminal.ConnectivityNode", node)
+            _text(terminal, CIM_NS, "ACDCTerminal.sequenceNumber",
+                  terminals[device_mrid].index(terminal_id) + 1)
+            if terminal_id in heads:
+                _ref(terminal, CIM_NS, "Terminal.NormalHeadFeeder", heads[terminal_id])
 
     _check_unique_ids(root)
     ET.indent(root, space="  ")
@@ -206,6 +221,56 @@ class _Selection:
                 )
         return found
 
+    def terminals(self) -> dict[str, list[str]]:
+        """Each device's terminal IDs, in terminal order.
+
+        A recorded node keeps the order its source gave the device's
+        terminals. A plain connection has no order of its own, so the one
+        towards the feeder head comes first, then the rest by mRID: for a
+        transformer that puts its primary at terminal 1, which is what end 1
+        of a transformer means.
+        """
+        included = {device.mrid for device in self.devices}
+        linked: dict[str, list[str]] = {}
+        for a, b in self.network.links():
+            if a in included and b in included:
+                linked.setdefault(a, []).append(b)
+                linked.setdefault(b, []).append(a)
+
+        parent = self.network.topology().parent
+        found: dict[str, list[str]] = {}
+        for device in self.devices:
+            mrid = device.mrid
+            recorded = [
+                _terminal_id(mrid, _recorded_node_id(node))
+                for node in self.network.nodes_of(mrid)
+            ]
+            others = sorted(linked.get(mrid, []), key=lambda other: (other != parent.get(mrid), other))
+            found[mrid] = recorded + [_terminal_id(mrid, other) for other in others]
+        return found
+
+    def node_container(self, members: list[str]) -> str | None:
+        """The container a connectivity node belongs to.
+
+        The feeder its equipment is on, when they agree. A node where
+        feeders meet -- at a tie -- belongs to their common substation, and
+        failing that to the first of their feeders.
+        """
+        feeders = sorted({
+            feeder for m in members
+            if (feeder := getattr(self.by_mrid[m], "feeder", None)) in self.by_mrid
+        })
+        if len(feeders) == 1:
+            return feeders[0]
+        substations = {
+            getattr(self.by_mrid[m], "substation", None) for m in members
+        }
+        if len(substations) == 1:
+            substation = substations.pop()
+            if substation in self.by_mrid:
+                return substation
+        return feeders[0] if feeders else None
+
 
 def _header(selection: _Selection) -> str:
     return (
@@ -276,10 +341,7 @@ def _write_device(root: ET.Element, selection: _Selection, device: Device) -> No
                 _text(element, CIM_NS, "RotatingMachine.ratedS", _number(device.kva * 1000.0))
             else:
                 _text(element, GRIDQL_NS, "kva", _number(device.kva))
-        if _GENERATOR_UNITS.get(device.kind or ""):
-            _ref(element, CIM_NS, "PowerElectronicsConnection.PowerElectronicsUnit",
-                 f"{device.mrid}_UNIT")
-        elif device.kw is not None:
+        if _GENERATOR_UNITS.get(device.kind or "") is None and device.kw is not None:
             _text(element, GRIDQL_NS, "kw", _number(device.kw))
         if device.kwh is not None and device.kind != "storage":
             # Only a BatteryUnit has a place for capacity in CIM.
@@ -290,7 +352,7 @@ def _write_device(root: ET.Element, selection: _Selection, device: Device) -> No
 
 #: Inverter kind -> the PowerElectronicsUnit that says what it converts.
 _GENERATOR_UNITS = {
-    "pv": "PhotovoltaicUnit",
+    "pv": "PhotoVoltaicUnit",
     "storage": "BatteryUnit",
     "wind": "PowerElectronicsWindUnit",
 }
@@ -302,6 +364,7 @@ def _write_generator_unit(root: ET.Element, generator: Generator) -> None:
     if unit_class is None:
         return
     element = _identified(root, unit_class, f"{generator.mrid}_UNIT")
+    _ref(element, CIM_NS, "PowerElectronicsUnit.PowerElectronicsConnection", generator.mrid)
     if generator.kw is not None:
         _text(element, CIM_NS, "PowerElectronicsUnit.maxP", _number(generator.kw * 1000.0))
     if generator.kwh is not None and unit_class == "BatteryUnit":
@@ -321,9 +384,13 @@ def _cim_class(device: Device) -> str:
 
 
 def _write_transformer_ends(
-    root: ET.Element, selection: _Selection, transformer: Transformer
+    root: ET.Element, selection: _Selection, transformer: Transformer, terminals: list[str]
 ) -> None:
-    """CIM keeps a transformer's ratings on its ends, not on the transformer."""
+    """CIM keeps a transformer's ratings on its ends, not on the transformer.
+
+    Each end names the terminal its winding is connected at: end n, the
+    transformer's nth terminal.
+    """
     windings = (
         (1, transformer.primary_voltage),
         (2, transformer.secondary_voltage),
@@ -335,6 +402,8 @@ def _write_transformer_ends(
         element = _identified(root, "PowerTransformerEnd", end_mrid)
         _text(element, CIM_NS, "TransformerEnd.endNumber", number)
         _ref(element, CIM_NS, "PowerTransformerEnd.PowerTransformer", transformer.mrid)
+        if number <= len(terminals):
+            _ref(element, CIM_NS, "TransformerEnd.Terminal", terminals[number - 1])
         if transformer.kva is not None:
             _text(element, CIM_NS, "PowerTransformerEnd.ratedS", _number(transformer.kva * 1000.0))
         if kilovolts is not None:

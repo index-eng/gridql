@@ -58,6 +58,9 @@ def text(element, tag):
     return None if found is None else found.text
 
 
+#: The namespace FOREIGN is written in: an older release than export writes.
+CIM16 = "http://iec.ch/TC57/2013/CIM-schema-cim16#"
+
 FOREIGN = """<?xml version="1.0" encoding="UTF-8"?>
 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
          xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#">
@@ -130,7 +133,7 @@ class ExportStructureTests(unittest.TestCase):
 
     def test_equipment_uses_its_cim_class(self):
         for cim_class, identifier in (
-            ("ProtectedSwitch", "REC-001"),
+            ("Recloser", "REC-001"),
             ("Breaker", "BRK-001"),
             ("Switch", "SW-001"),
             ("PowerTransformer", "XFMR-001"),
@@ -143,12 +146,12 @@ class ExportStructureTests(unittest.TestCase):
                 find(self.document, cim_class, identifier)
 
     def test_every_object_carries_its_mrid(self):
-        recloser = find(self.document, "ProtectedSwitch", "REC-001")
+        recloser = find(self.document, "Recloser", "REC-001")
         self.assertEqual(text(recloser, f"{CIM}IdentifiedObject.mRID"), "REC-001")
         self.assertEqual(text(recloser, f"{CIM}IdentifiedObject.name"), "Mainline Recloser")
 
     def test_equipment_points_at_its_container(self):
-        recloser = find(self.document, "ProtectedSwitch", "REC-001")
+        recloser = find(self.document, "Recloser", "REC-001")
         reference = recloser.find(f"{CIM}Equipment.EquipmentContainer")
         self.assertEqual(reference.get(f"{RDF}resource"), "#FDR-104")
 
@@ -330,7 +333,7 @@ class SubsetExportTests(unittest.TestCase):
 
     def test_cim_is_an_output_format(self):
         document = render(execute(self.network, "FIND reclosers RETURN cim"), "cim")
-        find(document, "ProtectedSwitch", "REC-001")
+        find(document, "Recloser", "REC-001")
 
 
 class ForeignDocumentTests(unittest.TestCase):
@@ -594,11 +597,11 @@ class OtherReleaseTests(unittest.TestCase):
     CIM100 = "http://iec.ch/TC57/CIM100#"
 
     def test_a_cim100_document_is_read(self):
-        document = loads_cim(FOREIGN.replace(CIM_NS, self.CIM100))
+        document = loads_cim(FOREIGN.replace(CIM16, self.CIM100))
         self.assertEqual(snapshot(document.network), snapshot(loads_cim(FOREIGN).network))
 
     def test_elements_in_a_namespace_gridql_does_not_read_are_reported(self):
-        document = loads_cim(FOREIGN.replace(CIM_NS, "http://example.com/not-cim#"))
+        document = loads_cim(FOREIGN.replace(CIM16, "http://example.com/not-cim#"))
         self.assertEqual(len(document.network), 0)
         self.assertTrue(any("http://example.com/not-cim#" in n for n in document.report.notes))
 
@@ -689,7 +692,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("11 devices", out)
         self.assertTrue(path.exists())
-        find(path.read_text(), "ProtectedSwitch", "REC-001")
+        find(path.read_text(), "Recloser", "REC-001")
 
     def test_export_to_stdout(self):
         code, out, _ = self.run_cli(["export-cim", "-"])
@@ -774,6 +777,78 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("XFMR-002", out)
         self.assertNotIn("XFMR-001", out)
+
+
+
+class StandardHeadAndContainmentTests(unittest.TestCase):
+    """What other tools write in place of GridQL's extensions."""
+
+    def document(self, extra, container="FDR_A"):
+        return f"""<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:cim="http://iec.ch/TC57/CIM100#">
+  <cim:Substation rdf:ID="ST_A"/>
+  <cim:Feeder rdf:ID="FDR_A">
+    <cim:Feeder.NormalEnergizingSubstation rdf:resource="#ST_A"/>
+  </cim:Feeder>
+  <cim:Breaker rdf:ID="B2">
+    <cim:Equipment.EquipmentContainer rdf:resource="#{container}"/>
+  </cim:Breaker>
+  <cim:Breaker rdf:ID="B1">
+    <cim:Equipment.EquipmentContainer rdf:resource="#FDR_A"/>
+  </cim:Breaker>
+  <cim:ConnectivityNode rdf:ID="CN1"/>
+  <cim:ConnectivityNode rdf:ID="CN2"/>
+  <cim:Terminal rdf:ID="T1">
+    <cim:Terminal.ConductingEquipment rdf:resource="#B1"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#CN1"/>
+  </cim:Terminal>
+  <cim:Terminal rdf:ID="T2">
+    <cim:Terminal.ConductingEquipment rdf:resource="#B2"/>
+    <cim:Terminal.ConnectivityNode rdf:resource="#CN1"/>
+  </cim:Terminal>
+  {extra}
+</rdf:RDF>"""
+
+    def test_the_head_is_read_from_its_terminal(self):
+        text = self.document("").replace(
+            '<cim:Terminal.ConnectivityNode rdf:resource="#CN1"/>\n  </cim:Terminal>\n  '
+            '<cim:Terminal rdf:ID="T2">',
+            '<cim:Terminal.ConnectivityNode rdf:resource="#CN1"/>\n'
+            '    <cim:Terminal.NormalHeadFeeder rdf:resource="#FDR_A"/>\n  </cim:Terminal>\n  '
+            '<cim:Terminal rdf:ID="T2">',
+        )
+        document = loads_cim(text)
+        self.assertEqual(document.network.objects["FDR_A"].head, "B1")
+        self.assertFalse(any("inferred" in note for note in document.report.notes))
+
+    def test_the_head_is_read_from_the_feeder(self):
+        text = self.document("").replace(
+            "</cim:Feeder>",
+            '<cim:Feeder.NormalHeadTerminal rdf:resource="#T2"/></cim:Feeder>',
+        )
+        self.assertEqual(loads_cim(text).network.objects["FDR_A"].head, "B2")
+
+    def test_equipment_in_a_voltage_level_is_in_its_substation(self):
+        text = self.document(
+            '<cim:VoltageLevel rdf:ID="VL1"><cim:VoltageLevel.Substation rdf:resource="#ST_A"/>'
+            "</cim:VoltageLevel>",
+            container="VL1",
+        )
+        breaker = loads_cim(text).network.objects["B2"]
+        self.assertEqual((breaker.substation, breaker.feeder), ("ST_A", None))
+
+    def test_equipment_in_a_bay_is_in_its_substation(self):
+        for bay in (
+            '<cim:Bay rdf:ID="BAY1"><cim:Bay.Substation rdf:resource="#ST_A"/></cim:Bay>',
+            '<cim:VoltageLevel rdf:ID="VL1"><cim:VoltageLevel.Substation rdf:resource="#ST_A"/>'
+            '</cim:VoltageLevel><cim:Bay rdf:ID="BAY1">'
+            '<cim:Bay.VoltageLevel rdf:resource="#VL1"/></cim:Bay>',
+        ):
+            with self.subTest(bay=bay[:40]):
+                document = loads_cim(self.document(bay, container="BAY1"))
+                self.assertEqual(document.network.objects["B2"].substation, "ST_A")
+                self.assertEqual(document.report.ignored, {})
 
 
 if __name__ == "__main__":

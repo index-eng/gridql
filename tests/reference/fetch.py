@@ -1,12 +1,14 @@
-"""Download the reference feeders the reference-model tests read.
+"""Download the reference feeders and schema the reference tests read.
 
 These are the IEEE distribution test feeders as other tools write them: in
 CIM as the GridAPPS-D project publishes them, and in OpenDSS -- the IEEE 13
 and 123-bus models GridAPPS-D converted those CIM files from, and EPRI's IEEE
 8500-node model. They test the importers against models the rest of the
-industry wrote, rather than ones written for GridQL. They are not committed
-here -- the GridAPPS-D repository carries no licence, and IEEE 8500 is 33 MB
-as CIM -- so the tests that need them skip until this has been run:
+industry wrote, rather than ones written for GridQL. Beside them is the CIM17
+schema, as PNNL's CIM-Graph publishes it, which GridQL's export is checked
+against. They are not committed here -- the GridAPPS-D repository carries no
+licence, IEEE 8500 is 33 MB as CIM, and the schema is the IEC's -- so the
+tests that need them skip until this has been run:
 
     python3 tests/reference/fetch.py                 # all of them
     python3 tests/reference/fetch.py IEEE13 IEEE13-dss
@@ -25,6 +27,10 @@ from pathlib import Path
 _GRIDAPPSD = (
     "https://raw.githubusercontent.com/GRIDAPPSD/Powergrid-Models/"
     "eaa0c3dcbc607e01c3f98092e3dea18929ae4d60/models/feeders/"
+)
+_CIM_GRAPH = (
+    "https://raw.githubusercontent.com/PNNL-CIM-Tools/CIM-Graph/"
+    "aab1abe6a4c7757971b90df83b836a5f1d468edc/cimgraph/data_profile/"
 )
 _EPRI = (
     "https://raw.githubusercontent.com/dss-extensions/electricdss-tst/"
@@ -68,6 +74,11 @@ MODELS = {
         "IEEE123Regulators.DSS": "cd6ad77980dc018631ce39faab528afce40b0b9a50a6bc1c9ac8049ffb8207d7",
         "IEEE123Loads.DSS": "fd28f52836205506a1980b52c5a7e12ca585aa626c52a6249502c1c3b2fc2255",
     }, folder=True),
+    # The whole of CIM17 (namespace CIM100), every class with its
+    # inheritance and members, as text: what an export may say.
+    "CIM17-schema": Model(_CIM_GRAPH + "cim17v40/", {
+        "CIM17v40.rdfs-t2b.md": "34a703800b24d26b7383d93a67170f0163e4f3cc626fe732994c218ec14a1281",
+    }),
     "IEEE8500-dss": Model(_EPRI + "8500-Node/", {
         "Master.dss": "9bd0e17f33e9ec7e0baa46693abeec069b148cbee8477301d77450f95d601ad8",
         "LineCodes2.DSS": "3fec9199a41696a758eaff7065f86a89477f70898b1bee3295de9c74f154121a",

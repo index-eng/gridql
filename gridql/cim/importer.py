@@ -301,6 +301,37 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
             heads[record.mrid] = resolve(record.reference(GRIDQL_NS, EXT_HEAD))
             report.feeders += 1
 
+    # The standard records a feeder's head on its terminal, and CIM16-era
+    # tools on the feeder; either names the equipment it is fed through.
+    # GridQL's own extension, being exact, is taken first.
+    equipment_at = {
+        record.mrid: resolve(record.reference(CIM_NS, "Terminal.ConductingEquipment"))
+        for record in grouped.get("Terminal", [])
+    }
+    for record in grouped.get("Terminal", []):
+        feeder = resolve(record.reference(CIM_NS, "Terminal.NormalHeadFeeder"))
+        if feeder in heads and heads[feeder] is None:
+            heads[feeder] = equipment_at.get(record.mrid)
+    for cim_class in ("Feeder", "Line"):
+        for record in grouped.get(cim_class, []):
+            terminal = resolve(record.reference(CIM_NS, "Feeder.NormalHeadTerminal"))
+            if record.mrid in heads and heads[record.mrid] is None and terminal:
+                heads[record.mrid] = equipment_at.get(terminal)
+
+    # Station equipment is often contained by a voltage level or a bay
+    # inside the substation, not by the substation itself.
+    in_substation: dict[str, str] = {}
+    for record in grouped.get("VoltageLevel", []):
+        substation = resolve(record.reference(CIM_NS, "VoltageLevel.Substation"))
+        if substation is not None:
+            in_substation[record.mrid] = substation
+    for record in grouped.get("Bay", []):
+        substation = resolve(record.reference(CIM_NS, "Bay.Substation")) or in_substation.get(
+            resolve(record.reference(CIM_NS, "Bay.VoltageLevel")) or ""
+        )
+        if substation is not None:
+            in_substation[record.mrid] = substation
+
     ends = _transformer_ends(grouped, resolve, base_voltages)
     units = _power_electronics_units(grouped, resolve)
     phases_of = _phases(grouped, resolve)
@@ -338,6 +369,7 @@ def _build(records: list[_Record], report: ImportReport) -> CimDocument:
             continue
 
         container = resolve(record.reference(CIM_NS, "Equipment.EquipmentContainer"))
+        container = in_substation.get(container or "", container)
         feeder_mrid = container if container in feeder_ids else None
         substation_mrid = None
         if feeder_mrid is not None:

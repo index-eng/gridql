@@ -216,7 +216,7 @@ class Switch(Device):
 @dataclass(repr=False)
 class Recloser(Switch):
     TYPE = "recloser"
-    CIM_CLASS = "ProtectedSwitch"
+    CIM_CLASS = "Recloser"
     PROTECTIVE = True
 
 
@@ -389,6 +389,7 @@ class Generator(Device):
 CIM_GENERATOR_KINDS = {
     "SynchronousMachine": "synchronous",
     "AsynchronousMachine": "induction",
+    "PhotoVoltaicUnit": "pv",
     "PhotovoltaicUnit": "pv",
     "BatteryUnit": "storage",
     "PowerElectronicsWindUnit": "wind",
