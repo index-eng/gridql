@@ -3,6 +3,7 @@
 --
 --   gridql run restore --csv data/restored
 
+PARAM fault   = "OH-701-02"
 PARAM isolate = "SW-701-02"
 
 -- What the operators changed, against the normal configuration. Every row
@@ -11,11 +12,23 @@ FIND switches
 WHERE state != normal_state
 SELECT mRID, name, feeder, state, normal_state;
 
--- Who is still out: the customers on the faulted span, waiting on the
--- tree crew.
+-- Who is still out, or may be: the customers on the faulted span,
+-- waiting on the tree crew.
 FIND loads
-WHERE NOT energized
+WHERE NOT energized OR energized IS MISSING
 SELECT mRID, name, feeder, customer_count, kw;
+
+-- Before the tree crew touches the span: is it dead? The model cannot
+-- say. It is cut off at both ends, but the rooftop solar on Mill Pond Rd
+-- is on the same section. Treat it as live until it is tested and
+-- grounded.
+FIND lines
+WHERE mRID = $fault
+SELECT mRID, name, energized;
+
+FIND generators
+WHERE energized IS MISSING
+SELECT mRID, name, kind, kw, kva;
 
 -- The customers back on through the tie. Their feeder has not changed:
 -- they still belong to Millbrook North, and are only borrowing Millbrook

@@ -28,7 +28,7 @@ Millbrook North (FDR-701)
 BKR-701 ── OH ──┬── REC-701-01 ── OH-701-02 ──┬── SW-701-02 ── OH ──┬─── OH ───┬─── OH ─── TIE-701-702
                 │   recloser      the span    │   Pine St           │          │          normally open
              FU-701-01                     FU-701-02             FU-701-03  FU-701-04        │
-             Church St                     Mill Pond Rd          High       Orchard Ln       │
+             Church St                     Mill Pond Rd + PV     High       Orchard Ln       │
                                                                  School     FU-701-05        │
                                                                             Care Home        │
 Millbrook South (FDR-702)                                                                    │
@@ -42,13 +42,26 @@ BKR-702 ── OH ──┬── OH ── REC-702-01 ── OH ──┬──
 The two feeders meet at `TIE-701-702`, a switch left open so that each feeder runs as its own
 radial circuit.
 
+Several houses on Mill Pond Rd have rooftop solar, recorded as one generator, `PV-7022`: 24 kW of
+panels behind 25 kVA of inverters. It sits on the lateral that hangs off the span the storm is about
+to bring a tree down on.
+
 ## 06:40: what the storm left
 
 ``` bash
 gridql run outage
 ```
 
-The first question is what is not where it should be:
+Before any answer, GridQL warns that validation found something in the model. `gridql validate`
+gives the full report:
+
+``` text
+0 errors, 1 warning
+
+warning possible-backfeed      PV-7022: generation on a section behind open REC-701-01, TIE-701-702, so its 24 devices may be backfed and their energized is unknown
+```
+
+Keep that in mind. The first question is what is not where it should be:
 
 ``` text
 mRID        name                feeder   state  normal_state
@@ -58,13 +71,45 @@ REC-701-01  Mill Pond Recloser  FDR-701  OPEN   CLOSED
 ```
 
 Two things have operated. A fuse blew on Willow Way, and the recloser on Millbrook North tried to
-clear a fault, failed, and locked out. Together they leave 30 customers dark, 19 on the north
-feeder and 11 on the south.
+clear a fault, failed, and locked out.
+
+Asked who is without power, GridQL names only Willow Way:
+
+``` text
+FIND loads WHERE NOT energized
+
+mRID     name              feeder   customer_count  kw
+-------  ----------------  -------  --------------  --
+SP-8022  Willow Way 2-18   FDR-702  6               21
+SP-8024  Willow Way 20-30  FDR-702  5               16
+```
+
+Everything below the recloser is cut off from the substation, but the Mill Pond Rd solar is cut off
+with it. Whether those inverters are backfeeding the section depends on their anti-islanding, which
+the model does not hold. So GridQL does not call those customers dark. Their `energized` is
+unknown, and the next query asks for exactly that:
+
+``` text
+FIND loads WHERE energized IS MISSING
+
+mRID     name                   feeder   customer_count  kw
+-------  ---------------------  -------  --------------  ---
+SP-7022  Mill Pond Rd 2-20      FDR-701  6               22
+SP-7024  Mill Pond Rd 22-30     FDR-701  4               14
+SP-7032  Millbrook High School  FDR-701  1               240
+SP-7042  Orchard Ln 1-13        FDR-701  7               28
+SP-7051  Maplewood Care Home    FDR-701  1               95
+```
+
+In practice the inverters almost certainly tripped within seconds, and meter data will confirm it.
+But "almost certainly" is not something the model can establish, and calling the section dead would
+be the dangerous mistake. Together the two lists account for 30 customers: 11 known dark on the
+south feeder, and 19 on the north that are out or possibly backfed.
 
 The last query in the file is the one worth noticing:
 
 ``` text
-FIND fuses WHERE NOT energized SELECT mRID, name, state
+FIND fuses WHERE NOT energized OR energized IS MISSING SELECT mRID, name, state
 
 mRID       name                  state
 ---------  --------------------  ------
@@ -74,7 +119,7 @@ FU-701-04  Orchard Ln tap        CLOSED
 FU-701-05  Maplewood Care riser  CLOSED
 ```
 
-These fuses are intact, and dark only because the recloser above them is open. A crew sent to
+These fuses are intact, and out only because the recloser above them is open. A crew sent to
 re-fuse them would have nothing to do. The fuse that *did* blow is missing from the list because its
 source side is still live. `state` is what a device is doing, and `energized` is whether power
 reaches it. GridQL keeps the two apart.
@@ -106,7 +151,7 @@ The recloser is already open upstream. Opening the Pine St switch cuts the fault
 everything beyond it. The Mill Pond Rd lateral hangs off the faulted span itself, so its 10
 customers wait for the tree crew.
 
-Everything beyond the Pine St switch is healthy, only dark:
+Everything beyond the Pine St switch is healthy, only cut off:
 
 ``` text
 FIND loads DOWNSTREAM OF "SW-701-02" SELECT COUNT(*), SUM(customer_count), SUM(kw)
@@ -134,7 +179,7 @@ gridql run restore --csv data/restored
 ```
 
 ``` text
-FIND loads WHERE NOT energized
+FIND loads WHERE NOT energized OR energized IS MISSING
 
 mRID     name                feeder   customer_count  kw
 -------  ------------------  -------  --------------  --
@@ -143,6 +188,30 @@ SP-7024  Mill Pond Rd 22-30  FDR-701  4               14
 ```
 
 Twenty of the thirty customers are back. The remaining ten are on the faulted span.
+
+### Before the tree crew climbs
+
+The span with the tree on it is now open at both ends: the recloser above it, the Pine St switch
+below. Is it dead?
+
+``` text
+FIND lines WHERE mRID = $fault SELECT mRID, name, energized
+
+mRID       name       energized
+---------  ---------  ---------
+OH-701-02  OH-701-02  -
+
+FIND generators WHERE energized IS MISSING SELECT mRID, name, kind, kw, kva
+
+mRID     name                        kind  kw  kva
+-------  --------------------------  ----  --  ---
+PV-7022  Mill Pond Rd rooftop solar  pv    24  25
+```
+
+GridQL will not say. The Mill Pond Rd solar is on the same isolated section, through the intact
+lateral fuse, so the span may be backfed. That is the answer a crew needs before work starts: treat
+the span as live until it has been tested and grounded. `gridql validate` gives the same warning,
+naming the solar and the two open switches that bound the section.
 
 The customers beyond the Pine St switch are energized again. Their power now reaches them from
 Millbrook South, across the closed tie, because energisation follows the switches as they stand.
@@ -159,6 +228,8 @@ before the day is done: the recloser, the Pine St switch and the tie.
 - Finish the day. Once the tree is cleared, the three switches go back to normal: in a copy of
   `data/restored`, set `REC-701-01` and `SW-701-02` to `CLOSED` and `TIE-701-702` to `OPEN`, then
   run `restore` against it. Nothing is off normal and nobody is out.
+- Take the solar away: delete the `PV-7022` row from a copy of `data/storm`, and run `outage`
+  against it. All 30 customers are reported dark, and `validate` has nothing to say.
 - Ask the model a question of your own: `gridql 'FIND devices PROTECTED BY "REC-702-01"'`.
 - Save the morning as a database with `gridql import-csv data/storm --db storm.sqlite`, then
   query it with `--db storm.sqlite`.

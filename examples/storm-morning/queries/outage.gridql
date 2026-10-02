@@ -9,21 +9,35 @@ FIND switches
 WHERE state != normal_state
 SELECT mRID, name, feeder, state, normal_state;
 
--- Who is without power.
+-- Who is known to be without power.
 FIND loads
 WHERE NOT energized
 SELECT mRID, name, feeder, customer_count, kw;
 
--- And how much of it, feeder by feeder.
+-- Who the model cannot call dark. Their energized is unknown, not false:
+-- they are cut off from the substation, but there is generation on the
+-- same section, and whether it is backfeeding them depends on its
+-- inverters' anti-islanding, which the model does not hold.
 FIND loads
-WHERE NOT energized
+WHERE energized IS MISSING
+SELECT mRID, name, feeder, customer_count, kw;
+
+-- The generation that might be.
+FIND generators
+WHERE energized IS MISSING
+SELECT mRID, name, kind, kw, kva;
+
+-- Everyone out or possibly out, feeder by feeder: the customers the
+-- operator has to account for.
+FIND loads
+WHERE NOT energized OR energized IS MISSING
 SELECT feeder, SUM(customer_count), SUM(kw)
 GROUP BY feeder;
 
--- Fuses that are dead but not blown. They are CLOSED and intact, and only
--- dark because something above them opened, so a crew sent to re-fuse
--- them would find nothing to do. The fuse that did blow is not here: its
--- source side is still live.
+-- Fuses that are intact but not known to be live. They are CLOSED, and
+-- out only because something above them opened, so a crew sent to
+-- re-fuse them would find nothing to do. The fuse that did blow is not
+-- here: its source side is still live.
 FIND fuses
-WHERE NOT energized
+WHERE NOT energized OR energized IS MISSING
 SELECT mRID, name, state

@@ -1557,8 +1557,9 @@ gridql --csv examples/csv \
 The repository also contains mapped and Postgres example datasets.
 
 [`examples/storm-morning/`](examples/storm-morning/) is a small, self-contained project that follows
-one outage from the first reports to restoration through a tie. It has its own project file, before
-and after snapshots, and three saved queries.
+one outage from the first reports to restoration through a tie, including whether rooftop solar may
+be backfeeding the span the tree crew works on. It has its own project file, before and after
+snapshots, and three saved queries.
 
 ------------------------------------------------------------------------
 
